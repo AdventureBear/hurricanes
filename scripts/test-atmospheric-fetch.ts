@@ -13,6 +13,7 @@
 
 import { getAtmosphericData } from '../app/actions/atmospheric-data';
 import type { GeographicBounds } from '../types/geographic';
+import type { RawAtmosphericProfile } from '../types/atmospheric';
 
 /**
  * Test Case 1: Small region (single point area for quick testing)
@@ -70,7 +71,7 @@ async function testCase1(): Promise<void> {
       }
       
       // Validate profile completeness
-      const requiredLevels = ['surface', 'level_850', 'level_700', 'level_500', 'level_400', 'level_300', 'level_250', 'level_200', 'level_150', 'level_100'];
+      const requiredLevels: Array<keyof RawAtmosphericProfile> = ['surface', 'level_850', 'level_700', 'level_500', 'level_400', 'level_300', 'level_250', 'level_200', 'level_150', 'level_100'];
       const missingLevels = requiredLevels.filter(level => !sample.profile[level]);
       
       if (missingLevels.length > 0) {
@@ -206,17 +207,25 @@ async function testCase3(): Promise<void> {
     console.log(`  Points: ${data2.pointCount}`);
     
     // Validate cache worked
-    const cacheWorked = parseFloat(time2) < parseFloat(time1) * 0.5; // Should be at least 2x faster
-    const dataMatches = data1.pointCount === data2.pointCount;
+    // If both fetches are from cache (both very fast), that's also valid
+    const bothFromCache = parseFloat(time1) < 0.1 && parseFloat(time2) < 0.1;
+    const cacheWorked = bothFromCache || parseFloat(time2) < parseFloat(time1) * 0.5;
+    const dataMatches = data1.pointCount === data2.pointCount && data1.date === data2.date;
     
     console.log('\nCache Validation:');
-    console.log(`  Second fetch faster: ${cacheWorked ? '✓' : '✗'} (${time1}s → ${time2}s)`);
+    if (bothFromCache) {
+      console.log(`  Both fetches from cache: ✓ (${time1}s → ${time2}s)`);
+      console.log(`  This is expected if data was already cached`);
+    } else {
+      console.log(`  Second fetch faster: ${cacheWorked ? '✓' : '✗'} (${time1}s → ${time2}s)`);
+    }
     console.log(`  Data matches: ${dataMatches ? '✓' : '✗'}`);
+    console.log(`  Same date: ${data1.date === data2.date ? '✓' : '✗'}`);
     
     if (cacheWorked && dataMatches) {
-      console.log('\n✓ Test Case 3 PASSED');
+      console.log('\n✓ Test Case 3 PASSED: Cache working correctly');
     } else {
-      console.log('\n✗ Test Case 3 FAILED');
+      console.log('\n✗ Test Case 3 FAILED: Cache behavior issue');
     }
   } catch (error) {
     console.error('\n✗ Test Case 3 ERROR:', error);

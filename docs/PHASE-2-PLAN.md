@@ -1,7 +1,7 @@
 # Phase 2: Maximum Potential Intensity (MPI) Calculation - Implementation Plan
 
-**Last Updated**: November 12, 2025 (after NSST migration)  
-**Status**: Ready to implement
+**Last Updated**: November 12, 2025 (Task 2.1 and 2.2 completed, Phase 1 tests added)  
+**Status**: In Progress (Tasks 2.1 and 2.2 complete, Task 2.3 next)
 
 ## Overview
 Phase 2 implements the core MPI calculation functionality using Emanuel's thermodynamic method, creating three visualization maps: SST (existing), Pressure, and Wind Speed.
@@ -57,39 +57,44 @@ Phase 2 implements the core MPI calculation functionality using Emanuel's thermo
 ## Phase 2 Task List
 
 ### **Task 2.1: PI Calculation Library - Complete Emanuel's Formula Implementation**
-**Priority**: High | **Estimated Time**: 12-16 hours (increased for complete implementation)
+**Priority**: High | **Estimated Time**: 12-16 hours (increased for complete implementation)  
+**Status**: [x] Complete (Implementation done, all tests passing)
 
 **⚠️ CRITICAL REQUIREMENT**: Implement the **COMPLETE Emanuel's thermodynamic method** - no simplifications. Scientific accuracy and expert validation are the core goals.
 
 **Subtasks**:
-- [ ] Create `lib/potential-intensity.ts`
-- [ ] Create `types/atmospheric.ts` with interfaces:
-  - `AtmosphericProfile` (complete vertical profile with all required levels)
+- [x] Create `lib/potential-intensity.ts`
+- [x] Create `types/atmospheric.ts` with interfaces:
+  - `RawAtmosphericProfile` (atmospheric data from GFS, without SST)
+  - `AtmosphericProfile` (complete profile with SST, extends RawAtmosphericProfile)
   - `PIResult` (vmax, pmin, category, calculation metadata)
   - `CalculationMetadata` (equations used, constants, validation info)
-- [ ] Research and document complete Emanuel's thermodynamic method:
+  - `HurricaneCategory` enum (TD, TS, Cat 1-5)
+- [x] Research and document complete Emanuel's thermodynamic method:
   - Read Emanuel's papers (1986, 1988, 1995)
-  - Document all equations with references
-  - Identify all required atmospheric levels
+  - Document all equations with references (Emanuel 1988, Eq. 8, 15, 16, 17)
+  - Identify all required atmospheric levels (surface, 850mb, 700mb, 500mb, 400mb, 300mb, 250mb, 200mb, 150mb, 100mb)
   - Document all constants and their sources
-- [ ] Implement **COMPLETE Emanuel's formula**:
+- [x] Implement **COMPLETE Emanuel's formula**:
   - Full vertical profile integration (all required atmospheric levels)
   - Complete thermodynamic calculations
   - Proper handling of all physical processes
   - Input: SST + complete atmospheric profile
   - Output: Vmax (knots), Pmin (millibars), Category, metadata
-- [ ] Add comprehensive documentation:
+  - Handles negative v_max_squared (no hurricane formation)
+- [x] Add comprehensive documentation:
   - Equation references (Emanuel paper citations)
   - Constant values and sources
   - Calculation steps with comments
   - Validation notes
-- [ ] Add Saffir-Simpson categorization function (all categories: TD, TS, Cat 1-5)
-- [ ] Add unit conversion utilities (m/s ↔ knots, Pa ↔ mb, K ↔ °C)
-- [ ] Add validation/error handling
-- [ ] Create validation test suite:
+- [x] Add Saffir-Simpson categorization function (all categories: TD, TS, Cat 1-5)
+- [x] Add unit conversion utilities (m/s ↔ knots, Pa ↔ mb, K ↔ °C)
+- [x] Add validation/error handling
+- [x] Create validation test suite:
   - Test against known MPI values from literature
   - Compare with published Emanuel's formula results
   - Validate edge cases
+  - All tests passing
 
 **Documentation Requirements**:
 - All equations must reference Emanuel's papers (year, equation number)
@@ -126,16 +131,18 @@ const result = calculatePI(profile);
 - Document any discrepancies and their sources
 
 **Files Created**:
-- `lib/potential-intensity.ts` (complete implementation with full documentation)
-- `types/atmospheric.ts`
-- `docs/EMANUEL-FORMULA-IMPLEMENTATION.md` (detailed documentation of method)
+- [x] `lib/potential-intensity.ts` (complete implementation with full documentation)
+- [x] `types/atmospheric.ts` (RawAtmosphericProfile, AtmosphericProfile, PIResult, CalculationMetadata, HurricaneCategory)
+- [x] `types/pi.ts` (PIGridPoint, PIDataResponse)
+- [x] `scripts/test-pi-calculation.ts` (comprehensive test suite, all tests passing)
+- [ ] `docs/EMANUEL-FORMULA-IMPLEMENTATION.md` (detailed documentation of method - to be created in Task 2.8)
 
 **Success Criteria**: 
-- Complete Emanuel's formula implemented (no simplifications)
-- Results match published Emanuel's formula calculations
-- All equations documented with references
-- Validation test suite passes
-- Code is reviewable by experts
+- [x] Complete Emanuel's formula implemented (no simplifications) ✅
+- [x] Results match published Emanuel's formula calculations ✅ (test suite validates)
+- [x] All equations documented with references ✅ (Emanuel 1988, Eq. 8, 15, 16, 17)
+- [x] Validation test suite passes ✅ (all tests passing)
+- [x] Code is reviewable by experts ✅ (comprehensive comments and metadata)
 
 ---
 
@@ -190,6 +197,7 @@ const result = calculatePI(profile);
 - [x] Testing passing - atmospheric profiles successfully extracted with complete vertical profiles
 - [x] Cache working correctly (6-hour TTL, 20-minute recent fetch bypass)
 - [x] Clarified data separation: SST comes from NSST (Phase 1), atmospheric profiles from GFS (no SST included)
+- [x] Type system updated: `RawAtmosphericProfile` (GFS, no SST) and `AtmosphericProfile` (with SST, for PI calculation)
 
 **Caching Strategy**:
 - File-based cache: `data/cache/atmospheric/atmospheric-YYYY-MM-DD-HH.json`
@@ -559,15 +567,20 @@ const profile = await getAtmosphericData({ lat: 25, lon: -80 });
 ## Implementation Order
 
 **Recommended Sequence**:
-1. **Task 2.1** → PI calculation library (foundation, simplified version)
-2. **Task 2.2** → Real atmospheric data API with THREDDS (with proper caching)
-3. **Task 2.3** → Combined PI API (core functionality, with result caching)
+1. **Task 2.1** → [x] PI calculation library (complete Emanuel's formula) - **COMPLETE**
+2. **Task 2.2** → [x] Real atmospheric data API with GRIB2/NOMADS (with proper caching) - **COMPLETE**
+3. **Task 2.3** → Combined PI API (core functionality, with result caching) - **NEXT**
 4. **Task 2.4** → Pressure map (first visualization)
 5. **Task 2.5** → Wind speed map (second visualization, can start with one category)
 6. **Task 2.6** → Dashboard layout (top/bottom for single basin)
 7. **Task 2.7** → Testing with real data (validation)
-8. **Task 2.8** → Complete Emanuel's formula (future enhancement for accuracy)
+8. **Task 2.8** → Validation and Expert Review Preparation (documentation, validation results)
 9. **Task 2.9** → Comprehensive testing (final validation)
+
+**Additional Work Completed**:
+- [x] Phase 1 test suite (`scripts/test-sst-fetch.ts`) - Validates SST data source and D3 map compatibility
+- [x] Test runner with colored output (`scripts/test-runner.ts`, `scripts/test-colors.ts`)
+- [x] Type system refinement: Separated `RawAtmosphericProfile` (GFS) from `AtmosphericProfile` (with SST)
 
 ---
 
@@ -602,20 +615,36 @@ const profile = await getAtmosphericData({ lat: 25, lon: -80 });
 
 ## Notes
 
-- **⚠️ CRITICAL: Complete Emanuel's Formula**: Implement the complete method from the start - no simplifications. Scientific accuracy is the core goal.
+- **⚠️ CRITICAL: Complete Emanuel's Formula**: Implement the complete method from the start - no simplifications. Scientific accuracy is the core goal. ✅ **COMPLETE** - Task 2.1 done.
 - **Show Our Work**: All calculations must be documented, traceable, and validatable by experts. Include references, validation data, and clear documentation.
-- **Real data from start**: Use real atmospheric data (GRIB2/NOMADS preferred for consistency, or THREDDS/OPeNDAP)
-- **Server Actions**: Use Server Actions pattern (consistent with NSST migration), not API routes
+- **Real data from start**: Use real atmospheric data (GRIB2/NOMADS preferred for consistency, or THREDDS/OPeNDAP) ✅ **COMPLETE** - Task 2.2 done.
+- **Server Actions**: Use Server Actions pattern (consistent with NSST migration), not API routes ✅ **COMPLETE** - All data fetching uses Server Actions.
 - **Smart caching**: 
-  - Atmospheric data: 6-hour minimum between checks, respect 20-minute recent fetch
-  - PI results: Calculate once per dataset, cache and reuse
+  - Atmospheric data: 6-hour minimum between checks, respect 20-minute recent fetch ✅ **COMPLETE**
+  - PI results: Calculate once per dataset, cache and reuse (Task 2.3)
 - **Subset testing**: Can scale to subset of grid points for initial testing, but validate with full data
-- **Scientific accuracy**: The goal is accurate data - complete Emanuel's formula implementation required
+- **Scientific accuracy**: The goal is accurate data - complete Emanuel's formula implementation required ✅ **COMPLETE** - Task 2.1 done.
 - **Performance**: Calculate once, cache results - no need to recalculate for each basin
 - **Layout**: Top/bottom for single basin view
-- **Categories**: Include all Saffir-Simpson categories (TD, TS, Cat 1-5)
+- **Categories**: Include all Saffir-Simpson categories (TD, TS, Cat 1-5) ✅ **COMPLETE** - Task 2.1 done.
 - **Documentation**: Must include equation references, validation data, and expert-reviewable code
+- **Data Separation**: SST comes from NSST (Phase 1), atmospheric profiles from GFS (no SST). Types reflect this: `RawAtmosphericProfile` (GFS) and `AtmosphericProfile` (with SST). ✅ **COMPLETE**
+- **Testing**: Comprehensive test suites created for Phase 1 (SST), Phase 2.1 (PI calculation), and Phase 2.2 (atmospheric data). Test runner with colored output. ✅ **COMPLETE**
 - **Commit frequently** after each task completion
+
+---
+
+## Progress Summary
+
+**Completed Tasks** (November 12, 2025):
+- [x] **Task 2.1**: PI Calculation Library - Complete Emanuel's formula implemented and tested
+- [x] **Task 2.2**: Atmospheric Data - GRIB2/NOMADS implementation complete and tested
+- [x] **Phase 1 Tests**: Added comprehensive test suite for SST data validation (`test-sst-fetch.ts`)
+- [x] **Test Infrastructure**: Created test runner with colored output, test index system
+
+**Current Status**:
+- Task 2.3 (Combined PI Calculation Server Action) is next
+- All infrastructure in place for combining NSST SST with GFS atmospheric profiles
 
 ---
 
