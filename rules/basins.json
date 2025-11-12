@@ -1,75 +1,101 @@
 [
-    {
-      "basin": "North Atlantic",
-      "coordinates": {
-        "topleft": [50.0, -100.0],
-        "topright": [50.0, 0.0],
-        "bottomright": [0.0, 0.0],
-        "bottomleft": [0.0, -100.0]
-      }
-    },
-    {
-      "basin": "Eastern North Pacific",
-      "coordinates": {
-        "topleft": [40.0, -140.0],
-        "topright": [40.0, -90.0],
-        "bottomright": [0.0, -90.0],
-        "bottomleft": [0.0, -140.0]
-      }
-    },
-    {
-      "basin": "Central North Pacific",
-      "coordinates": {
-        "topleft": [40.0, -180.0],
-        "topright": [40.0, -140.0],
-        "bottomright": [0.0, -140.0],
-        "bottomleft": [0.0, -180.0]
-      }
-    },
-    {
-      "basin": "Western North Pacific",
-      "coordinates": {
-        "topleft": [60.0, 100.0],
-        "topright": [60.0, 180.0],
-        "bottomright": [0.0, 180.0],
-        "bottomleft": [0.0, 100.0]
-      }
-    },
-    {
-      "basin": "North Indian Ocean",
-      "coordinates": {
-        "topleft": [30.0, 45.0],
-        "topright": [30.0, 100.0],
-        "bottomright": [0.0, 100.0],
-        "bottomleft": [0.0, 45.0]
-      }
-    },
-    {
-      "basin": "South-West Indian Ocean",
-      "coordinates": {
-        "topleft": [0.0, 30.0],
-        "topright": [0.0, 90.0],
-        "bottomright": [-40.0, 90.0],
-        "bottomleft": [-40.0, 30.0]
-      }
-    },
-    {
-      "basin": "Australian Region",
-      "coordinates": {
-        "topleft": [0.0, 90.0],
-        "topright": [0.0, 160.0],
-        "bottomright": [-40.0, 160.0],
-        "bottomleft": [-40.0, 90.0]
-      }
-    },
-    {
-      "basin": "South Pacific",
-      "coordinates": {
-        "topleft": [0.0, 160.0],
-        "topright": [0.0, -120.0],
-        "bottomright": [-40.0, -120.0],
-        "bottomleft": [-40.0, 160.0]
-      }
+  {
+    "basin": "World",
+    "coordinates": {
+      "topleft": [60.0, -180.0],
+      "topright": [60.0, 180.0],
+      "bottomright": [-40.0, 180.0],
+      "bottomleft": [-40.0, -180.0]
     }
-  ]
-  
+  },
+  {
+    "basin": "North Atlantic",
+    "coordinates": {
+      "topleft": [50.0, -100.0],
+      "topright": [50.0, 0.0],
+      "bottomright": [5.0, 0.0],
+      "bottomleft": [5.0, -100.0]
+    }
+  },
+  {
+    "basin": "Western Atlantic",
+    "coordinates": {
+      "topleft": [40.0, -100.0],
+      "topright": [40.0, -60.0],
+      "bottomright": [10.0, -60.0],
+      "bottomleft": [10.0, -100.0]
+    }
+  },
+  {
+    "basin": "Tropical Atlantic",
+    "coordinates": {
+      "topleft": [30.0, -60.0],
+      "topright": [30.0, 0.0],
+      "bottomright": [5.0, 0.0],
+      "bottomleft": [5.0, -60.0]
+    }
+  },
+  {
+    "basin": "Eastern Pacific",
+    "coordinates": {
+      "topleft": [40.0, -140.0],
+      "topright": [40.0, -90.0],
+      "bottomright": [0.0, -90.0],
+      "bottomleft": [0.0, -140.0]
+    }
+  },
+  {
+    "basin": "Central Pacific",
+    "coordinates": {
+      "topleft": [40.0, -180.0],
+      "topright": [40.0, -140.0],
+      "bottomright": [0.0, -140.0],
+      "bottomleft": [0.0, -180.0]
+    }
+  },
+  {
+    "basin": "Western Pacific",
+    "coordinates": {
+      "topleft": [50.0, 100.0],
+      "topright": [50.0, 180.0],
+      "bottomright": [0.0, 180.0],
+      "bottomleft": [0.0, 100.0]
+    }
+  },
+  {
+    "basin": "Southwestern Pacific",
+    "coordinates": {
+      "topleft": [0.0, 140.0],
+      "topright": [0.0, -170.0],
+      "bottomright": [-40.0, -170.0],
+      "bottomleft": [-40.0, 140.0]
+    }
+  },
+  {
+    "basin": "Australia",
+    "coordinates": {
+      "topleft": [0.0, 90.0],
+      "topright": [0.0, 160.0],
+      "bottomright": [-40.0, 160.0],
+      "bottomleft": [-40.0, 90.0]
+    }
+  },
+  {
+    "basin": "Indian Ocean",
+    "coordinates": {
+      "topleft": [30.0, 20.0],
+      "topright": [30.0, 140.0],
+      "bottomright": [-40.0, 140.0],
+      "bottomleft": [-40.0, 20.0]
+    }
+  },
+  {
+    "basin": "South Atlantic",
+    "coordinates": {
+      "topleft": [5.0, -50.0],
+      "topright": [5.0, 20.0],
+      "bottomright": [-40.0, 20.0],
+      "bottomleft": [-40.0, -50.0]
+    }
+  }
+]

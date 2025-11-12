@@ -1,12 +1,17 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import * as d3 from 'd3';
 import { geoMercator } from 'd3-geo';
 import { contours } from 'd3-contour';
 import * as topojson from 'topojson-client';
 import type { SSTDataResponse } from '../types/sst';
+import type { Basin, GeographicBounds } from '../types/geographic';
 import SSTColorLegend, { createOceanographicScale } from './sst-color-legend';
+import basinsDataRaw from '../rules/basins.json';
+
+// Type assertion for imported JSON (tuples are inferred as number[])
+const basinsData = basinsDataRaw as Basin[];
 
 interface D3SSTMapProps {
   width?: number;
@@ -15,7 +20,51 @@ interface D3SSTMapProps {
 
 type VisualizationMode = 'gridded' | 'contour';
 
-export default function D3SSTMap({ width = 1200, height = 700 }: D3SSTMapProps) {
+// Convert basin coordinates to GeographicBounds
+function basinToBounds(basin: Basin): GeographicBounds {
+  const coords = basin.coordinates;
+  const lats = [coords.topleft[0], coords.topright[0], coords.bottomright[0], coords.bottomleft[0]];
+  const lons = [coords.topleft[1], coords.topright[1], coords.bottomright[1], coords.bottomleft[1]];
+  
+  return {
+    minLat: Math.min(...lats),
+    maxLat: Math.max(...lats),
+    minLon: Math.min(...lons),
+    maxLon: Math.max(...lons)
+  };
+}
+
+export default function D3SSTMap({ width: propWidth, height: propHeight }: D3SSTMapProps) {
+  // Responsive sizing
+  const [dimensions, setDimensions] = useState({
+    width: propWidth || 1200,
+    height: propHeight || 700
+  });
+  
+  useEffect(() => {
+    const updateDimensions = () => {
+      const container = document.getElementById('map-container');
+      if (container) {
+        const containerWidth = container.clientWidth;
+        // Use container width minus padding, with max width constraint
+        const maxWidth = 1400;
+        const padding = 32; // Account for container padding
+        const calculatedWidth = Math.min(containerWidth - padding, maxWidth);
+        const calculatedHeight = Math.round(calculatedWidth * 0.583); // Maintain ~7:12 aspect ratio
+        
+        setDimensions({
+          width: calculatedWidth || propWidth || 1200,
+          height: calculatedHeight || propHeight || 700
+        });
+      }
+    };
+    
+    updateDimensions();
+    window.addEventListener('resize', updateDimensions);
+    return () => window.removeEventListener('resize', updateDimensions);
+  }, [propWidth, propHeight]);
+  
+  const { width, height } = dimensions;
   const svgRef = useRef<SVGSVGElement>(null);
   const [data, setData] = useState<SSTDataResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -23,6 +72,9 @@ export default function D3SSTMap({ width = 1200, height = 700 }: D3SSTMapProps) 
   const [refreshing, setRefreshing] = useState(false);
   const [visualizationMode, setVisualizationMode] = useState<VisualizationMode>('gridded');
   const [showContourLines, setShowContourLines] = useState(true);
+  const [selectedBasin, setSelectedBasin] = useState<Basin>(
+    basinsData.find(b => b.basin === 'North Atlantic') || basinsData[1]
+  );
   const [tooltip, setTooltip] = useState<{
     show: boolean;
     x: number;
@@ -30,64 +82,156 @@ export default function D3SSTMap({ width = 1200, height = 700 }: D3SSTMapProps) 
     content: string;
   }>({ show: false, x: 0, y: 0, content: '' });
   const [mapBounds, setMapBounds] = useState<{ top: number; bottom: number; height: number } | null>(null);
+  const [filteredData, setFilteredData] = useState<SSTDataResponse | null>(null);
+  const isRenderingRef = useRef(false);
+  const hasFetchedRef = useRef(false);
 
-  // Fetch SST data
-  const fetchData = async () => {
+  // Fetch global SST data (covers all basins) - only fetch once
+  const fetchData = useCallback(async () => {
+    // Prevent multiple fetches
+    if (hasFetchedRef.current) {
+      console.log('[Map] Already fetched data, skipping...');
+      return;
+    }
+    
+    hasFetchedRef.current = true;
+    
     try {
       setLoading(true);
       setError(null);
       
+      console.log('[Map] Starting fetch...');
       const response = await fetch('/api/sst-data');
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       }
       
+      console.log('[Map] Response received, parsing...');
       const jsonData: SSTDataResponse = await response.json();
-      console.log(`[Map] Loaded ${jsonData.pointCount} SST grid points`);
+      console.log(`[Map] Loaded ${jsonData.pointCount} global SST grid points`);
       setData(jsonData);
     } catch (err) {
       console.error('[Map] Error fetching SST data:', err);
       setError(String(err));
+      hasFetchedRef.current = false; // Allow retry on error
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  };
+  }, []); // Only fetch once on mount
 
-  // Fetch on mount
+  // Fetch global data once on mount
   useEffect(() => {
-    fetchData();
-  }, []);
+    if (!hasFetchedRef.current) {
+      fetchData();
+    }
+  }, [fetchData]);
+
+  // Filter data when basin or global data changes
+  useEffect(() => {
+    if (!data) {
+      setFilteredData(null);
+      return;
+    }
+
+    console.log(`[Map] Filtering ${data.pointCount} global points for ${selectedBasin.basin}...`);
+    const clipBounds = basinToBounds(selectedBasin);
+    
+    // Filter data to selected basin bounds and valid SST values
+    // Handle longitude wraparound (e.g., South Pacific: 160°E to -120°W)
+    const filteredPoints = data.gridPoints.filter(p => {
+      // Check SST validity
+      if (p.sst < 10 || p.sst > 35) return false;
+      
+      // Check latitude
+      if (p.lat < clipBounds.minLat || p.lat > clipBounds.maxLat) return false;
+      
+      // Check longitude (handle wraparound)
+      if (clipBounds.minLon <= clipBounds.maxLon) {
+        // Normal case: no wraparound
+        return p.lon >= clipBounds.minLon && p.lon <= clipBounds.maxLon;
+      } else {
+        // Wraparound case: e.g., 160°E to -120°W (160° to 240°)
+        return p.lon >= clipBounds.minLon || p.lon <= clipBounds.maxLon;
+      }
+    });
+    
+    console.log(`[Map] Filtered to ${filteredPoints.length} points within ${selectedBasin.basin} bounds`);
+    
+    setFilteredData({
+      ...data,
+      gridPoints: filteredPoints,
+      pointCount: filteredPoints.length,
+      bounds: clipBounds
+    });
+  }, [data, selectedBasin]);
 
   // Refresh handler
   const handleRefresh = () => {
+    hasFetchedRef.current = false; // Allow refetch
     setRefreshing(true);
     fetchData();
   };
 
-  // Render D3 map when data changes
+  // Render D3 map when filtered data changes
   useEffect(() => {
-    if (!data || !svgRef.current) return;
+    if (!filteredData || !svgRef.current) {
+      console.log('[Map] Skipping render - no filtered data or SVG ref');
+      return;
+    }
+    
+    // Prevent concurrent renders
+    if (isRenderingRef.current) {
+      console.log('[Map] Render already in progress, skipping...');
+      return;
+    }
+    
+    isRenderingRef.current = true;
+    console.log(`[Map] Starting render for ${selectedBasin.basin} with ${filteredData.pointCount} points...`);
 
     const svg = d3.select(svgRef.current);
     svg.selectAll('*').remove(); // Clear previous render
 
-    // Define clipping bounds matching SST data bounds: 5°N-45°N, 95°W-10°W
-    // This must be defined BEFORE the projection so we can use it for graticule extent
-    const clipBounds = {
-      minLat: 5,
-      maxLat: 45,
-      minLon: -95,
-      maxLon: -10
+    // Define padding for graticule labels (responsive - scales with map size)
+    // Top/bottom for longitude labels, left for latitude labels, right for legend
+    const basePadding = Math.min(width, height) * 0.03; // 3% of smaller dimension
+    const padding = {
+      top: Math.max(20, basePadding),    // Space for top longitude labels (min 20px)
+      bottom: Math.max(20, basePadding), // Space for bottom longitude labels (min 20px)
+      left: Math.max(35, basePadding * 1.5),   // Space for left latitude labels (min 35px)
+      right: 0    // No padding on right - legend will be positioned outside SVG
     };
+    
+    // Calculate available space for the map (excluding padding)
+    const mapWidth = width - padding.left - padding.right;
+    const mapHeight = height - padding.top - padding.bottom;
 
+    // Get bounds for selected basin (from filtered data)
+    const clipBounds = filteredData.bounds;
+    const centerLon = (clipBounds.minLon + clipBounds.maxLon) / 2;
+    const centerLat = (clipBounds.minLat + clipBounds.maxLat) / 2;
+    
+    // Calculate appropriate scale based on basin size
+    const lonRange = clipBounds.maxLon - clipBounds.minLon;
+    const latRange = clipBounds.maxLat - clipBounds.minLat;
+    const aspectRatio = mapWidth / mapHeight;
+    const basinAspectRatio = lonRange / latRange;
+    
+    // Scale to fit the basin, accounting for aspect ratio
+    let scale = 700; // Default scale
+    if (basinAspectRatio > aspectRatio) {
+      // Basin is wider than container - scale by longitude
+      scale = (mapWidth * 0.95) / (lonRange * Math.PI / 180);
+    } else {
+      // Basin is taller than container - scale by latitude
+      scale = (mapHeight * 0.95) / (latRange * Math.PI / 180);
+    }
+    
     // Set up Mercator projection - standard for tropical weather mapping
-    // Atlantic basin: 5°N-45°N, 95°W-10°W
-    // Center: ~25°N, ~52.5°W
-    // Use a fixed scale that works well for this region
+    // Translate to account for padding
     const projection = geoMercator()
-      .center([-52.5, 25]) // Center on Atlantic basin
-      .scale(700) // Fixed scale for consistent sizing
+      .center([centerLon, centerLat])
+      .scale(scale)
       .translate([width / 2, height / 2]);
     
     // Create path generator ONCE with the projection - use for BOTH data and coastlines
@@ -171,8 +315,8 @@ export default function D3SSTMap({ width = 1200, height = 700 }: D3SSTMapProps) 
     latLines.forEach(lat => {
       const [x, y] = projection([clipBounds.minLon, lat]) || [0, 0];
       
-      // Left side label (outside border)
-      if (x >= 0 && y >= 0 && y <= height) {
+      // Left side label (outside border, within padding area)
+      if (x >= padding.left && y >= padding.top && y <= height - padding.bottom) {
         labelGroup.append('text')
           .attr('x', clipX - 8)
           .attr('y', y)
@@ -191,8 +335,8 @@ export default function D3SSTMap({ width = 1200, height = 700 }: D3SSTMapProps) 
       const [x, y] = projection([lon, clipBounds.minLat]) || [0, 0];
       const [xTop, yTop] = projection([lon, clipBounds.maxLat]) || [0, 0];
       
-      // Bottom label (outside border)
-      if (x >= 0 && x <= width && y >= 0) {
+      // Bottom label (outside border, within padding area)
+      if (x >= padding.left && x <= width - padding.right && y >= padding.top) {
         labelGroup.append('text')
           .attr('x', x)
           .attr('y', clipY + clipHeight + 18)
@@ -204,8 +348,8 @@ export default function D3SSTMap({ width = 1200, height = 700 }: D3SSTMapProps) 
           .text(`${lon < 0 ? Math.abs(lon) + '°W' : lon === 0 ? '0°' : lon + '°E'}`);
       }
       
-      // Top label (outside border)
-      if (xTop >= 0 && xTop <= width && yTop >= 0) {
+      // Top label (outside border, within padding area)
+      if (xTop >= padding.left && xTop <= width - padding.right && yTop >= padding.top) {
         labelGroup.append('text')
           .attr('x', xTop)
           .attr('y', clipY - 8)
@@ -218,10 +362,8 @@ export default function D3SSTMap({ width = 1200, height = 700 }: D3SSTMapProps) 
       }
     });
 
-    console.log(`[Map] Rendering ${data.gridPoints.length} points as ${visualizationMode}...`);
-    
-    // Filter valid data
-    const validPoints = data.gridPoints.filter(p => p.sst >= 10 && p.sst <= 35);
+    // Use filtered data (already filtered to basin bounds)
+    const validPoints = filteredData.gridPoints;
     
     if (visualizationMode === 'gridded') {
       // Render each grid cell as a rectangle
@@ -233,12 +375,6 @@ export default function D3SSTMap({ width = 1200, height = 700 }: D3SSTMapProps) 
       const gridGroup = g.append('g').attr('class', 'sst-grid');
       
       validPoints.forEach(d => {
-        // Additional geographic bounds check (redundant with clipping but helps performance)
-        if (d.lat < clipBounds.minLat || d.lat > clipBounds.maxLat ||
-            d.lon < clipBounds.minLon || d.lon > clipBounds.maxLon) {
-          return; // Skip points outside bounds
-        }
-        
         // Calculate cell boundaries in geographic coordinates
         // Add small overlap (0.01°) to eliminate gaps between pixels
         const overlap = 0.01;
@@ -504,7 +640,7 @@ export default function D3SSTMap({ width = 1200, height = 700 }: D3SSTMapProps) 
     
     // Add invisible point overlay for tooltips
     g.selectAll('circle.hover-target')
-      .data(data.gridPoints.filter(p => p.sst >= 10 && p.sst <= 35))
+      .data(filteredData.gridPoints)
       .enter()
       .append('circle')
       .attr('class', 'hover-target')
@@ -584,7 +720,8 @@ export default function D3SSTMap({ width = 1200, height = 700 }: D3SSTMapProps) 
       .catch(err => console.error('[Map] Error loading coastlines:', err));
 
     console.log('[Map] Rendering complete');
-  }, [data, width, height, visualizationMode, showContourLines]);
+    isRenderingRef.current = false;
+  }, [filteredData, width, height, visualizationMode, showContourLines, selectedBasin]);
 
   if (loading) {
     return (
@@ -610,12 +747,34 @@ export default function D3SSTMap({ width = 1200, height = 700 }: D3SSTMapProps) 
   }
 
   return (
-    <div className="relative">
-      {/* Visualization Controls */}
+    <div className="relative w-full" id="map-container">
+      {/* Controls */}
       {data && (
-        <div className="mb-4 flex items-center gap-6 bg-white rounded-lg border border-gray-300 p-3 shadow-sm">
+        <div className="mb-4 flex flex-col sm:flex-row items-start sm:items-center gap-4 bg-white rounded-lg border border-gray-300 p-3 shadow-sm">
+          {/* Basin Selector */}
+          <div className="flex items-center gap-3 flex-shrink-0">
+            <label htmlFor="basin-select" className="text-sm font-medium text-gray-700">
+              Basin:
+            </label>
+            <select
+              id="basin-select"
+              value={selectedBasin.basin}
+              onChange={(e) => {
+                const basin = basinsData.find(b => b.basin === e.target.value);
+                if (basin) setSelectedBasin(basin);
+              }}
+              className="px-3 py-1.5 text-sm border border-gray-300 rounded-lg bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+            >
+              {basinsData.map(basin => (
+                <option key={basin.basin} value={basin.basin}>
+                  {basin.basin}
+                </option>
+              ))}
+            </select>
+          </div>
+          
           {/* Visualization Mode Switch */}
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 flex-shrink-0">
             <span className="text-sm font-medium text-gray-700">Visualization:</span>
             <label className="relative inline-flex items-center cursor-pointer">
               <input
@@ -633,7 +792,7 @@ export default function D3SSTMap({ width = 1200, height = 700 }: D3SSTMapProps) 
           
           {/* Contour Lines Toggle (only show in contour mode) */}
           {visualizationMode === 'contour' && (
-            <div className="flex items-center gap-3 border-l border-gray-300 pl-6">
+            <div className="flex items-center gap-3 border-l border-gray-300 pl-4 sm:pl-6 flex-shrink-0">
               <span className="text-sm font-medium text-gray-700">Contour Lines:</span>
               <label className="relative inline-flex items-center cursor-pointer">
                 <input
@@ -653,24 +812,36 @@ export default function D3SSTMap({ width = 1200, height = 700 }: D3SSTMapProps) 
       )}
       
       {/* Map and Legend Container */}
-      <div className="flex gap-4 items-start bg-white rounded-lg border border-gray-300 p-4 shadow-lg">
-        <div className="relative flex gap-0 items-stretch">
-          <svg
-            ref={svgRef}
-            width={width}
-            height={height}
-            className="bg-white"
-            style={{ display: 'block' }}
-          />
-          
-          {/* Vertical Legend on Right - flush against map border, perfectly aligned */}
-          {data && mapBounds && (
-            <div className="flex-shrink-0" style={{ height: `${height}px`, position: 'relative', overflow: 'visible' }}>
-              <div style={{ position: 'absolute', top: `${mapBounds.top}px`, height: `${mapBounds.height}px`, overflow: 'visible' }}>
-                <SSTColorLegend width={80} height={mapBounds.height} />
+      <div className="flex flex-col sm:flex-row gap-4 items-start bg-white rounded-lg border border-gray-300 p-4 shadow-lg" style={{ overflow: 'visible' }}>
+        <div className="relative w-full" style={{ overflow: 'visible' }}>
+          <div className="relative inline-block" style={{ overflow: 'visible' }}>
+            <svg
+              ref={svgRef}
+              width={width}
+              height={height}
+              className="bg-white"
+              style={{ display: 'block', maxWidth: '100%', height: 'auto', overflow: 'visible' }}
+              viewBox={`0 0 ${width} ${height}`}
+              preserveAspectRatio="xMidYMid meet"
+            />
+            
+            {/* Vertical Legend on Right - flush against map border, perfectly aligned */}
+            {data && mapBounds && (
+              <div 
+                className="absolute flex-shrink-0"
+                style={{ 
+                  left: `${width}px`,
+                  top: `${mapBounds.top}px`, 
+                  height: `${mapBounds.height}px`, 
+                  overflow: 'visible',
+                  marginLeft: '0px', // No gap between map and legend
+                  zIndex: 10
+                }}
+              >
+                <SSTColorLegend width={90} height={mapBounds.height} />
               </div>
-            </div>
-          )}
+            )}
+          </div>
         </div>
       </div>
       
@@ -693,7 +864,7 @@ export default function D3SSTMap({ width = 1200, height = 700 }: D3SSTMapProps) 
         <div className="mt-4 flex items-center justify-between bg-white rounded-lg border border-gray-300 p-4 shadow-sm">
           <div className="text-sm text-gray-900">
             <p><strong className="text-gray-700">Data Date:</strong> {data.date}</p>
-            <p><strong className="text-gray-700">Grid Points:</strong> {data.pointCount.toLocaleString()}</p>
+            <p><strong className="text-gray-700">Grid Points:</strong> {data ? data.pointCount.toLocaleString() : '0'} (Global: {data?.pointCount.toLocaleString() || '0'}, Filtered: {filteredData?.pointCount.toLocaleString() || '0'})</p>
             <p><strong className="text-gray-700">Source:</strong> {data.source}</p>
           </div>
           <button

@@ -47,7 +47,7 @@ export default function SSTColorLegend({ width = 80, height = 400 }: SSTColorLeg
       .attr('stop-color', d => colorScale(d));
 
     // Draw gradient rectangle - no margins, full height
-    const margin = { top: 0, right: 20, bottom: 0, left: 10 }; // More right margin for labels
+    const margin = { top: 0, right: 25, bottom: 0, left: 10 }; // More right margin for labels to prevent clipping
     const gradientWidth = 30;
     const gradientHeight = height; // Full height, no margins
 

@@ -1,13 +1,51 @@
 import { NextResponse } from 'next/server';
 import { isCacheValid, readCache, writeCache } from '@/lib/cache-manager';
 import type { SSTDataResponse, SSTGridPoint } from '@/types/sst';
+import type { GeographicBounds } from '@/types/geographic';
 
 /**
- * Fetches SST data from NOAA PSL OISST v2.1
- * Atlantic Basin: 5°N-45°N, 95°W-10°W
- * Resolution: 0.25° x 0.25° (~45,000 grid points)
+ * Converts geographic bounds to NOAA OISST grid indices
+ * OISST grid: -89.875° to 89.875° lat (720 points), 0.125° to 359.875° lon (1440 points)
  */
-async function fetchSSTDataFromNOAA(): Promise<SSTDataResponse> {
+function boundsToIndices(bounds: GeographicBounds): { latStart: number; latEnd: number; lonStart: number; lonEnd: number } {
+  // Latitude: -89.875 to 89.875 in 0.25° steps
+  // Index = (lat + 89.875) / 0.25
+  const latStart = Math.max(0, Math.floor((bounds.minLat + 89.875) / 0.25));
+  const latEnd = Math.min(719, Math.ceil((bounds.maxLat + 89.875) / 0.25));
+  
+  // Longitude: 0-360 range in OISST, convert -180 to 180 to 0-360
+  // Handle global case (-180 to 180) specially - fetch full 0-360 range
+  let lonStart: number;
+  let lonEnd: number;
+  
+  if (bounds.minLon <= -180 && bounds.maxLon >= 180) {
+    // Global case: fetch all longitudes (0-360, which is all 1440 points)
+    lonStart = 0;
+    lonEnd = 1439;
+  } else {
+    // Convert -180 to 180 range to 0-360 range
+    const lonMin360 = bounds.minLon < 0 ? bounds.minLon + 360 : bounds.minLon;
+    const lonMax360 = bounds.maxLon < 0 ? bounds.maxLon + 360 : bounds.maxLon;
+    
+    // Handle wraparound (e.g., South Pacific: 160°E to 120°W = 160° to 240°)
+    if (lonMax360 < lonMin360) {
+      // Wraparound case - fetch full range
+      lonStart = 0;
+      lonEnd = 1439;
+    } else {
+      lonStart = Math.max(0, Math.floor(lonMin360 / 0.25));
+      lonEnd = Math.min(1439, Math.ceil(lonMax360 / 0.25));
+    }
+  }
+  
+  return { latStart, latEnd, lonStart, lonEnd };
+}
+
+/**
+ * Fetches SST data from NOAA PSL OISST v2.1 for specified bounds
+ * Resolution: 0.25° x 0.25°
+ */
+async function fetchSSTDataFromNOAA(bounds: GeographicBounds): Promise<SSTDataResponse> {
   console.log('[SST API] Fetching fresh data from NOAA (this should only happen when cache is invalid or expired)...');
   const startTime = Date.now();
   
@@ -76,24 +114,21 @@ async function fetchSSTDataFromNOAA(): Promise<SSTDataResponse> {
   const dateString = dataDate.toISOString().split('T')[0];
   console.log(`[SST API] Final data date: ${dateString} from year ${dataYear}`);
   
-  // Step 2: Fetch full Atlantic basin SST data
-  // Grid coordinates:
-  // Latitude: 5°N to 45°N = indices 379 to 539 (161 points)
-  // Longitude: -95°W to -10°W = indices 1059 to 1399 (341 points)
-  // Total: 161 * 341 = 54,901 points (some will be land/masked)
+  // Step 2: Convert bounds to grid indices
+  const { latStart, latEnd, lonStart, lonEnd } = boundsToIndices(bounds);
+  const expectedPoints = (latEnd - latStart + 1) * (lonEnd - lonStart + 1);
   
-  const latStart = 379;  // 5°N
-  const latEnd = 539;    // 45°N
-  const lonStart = 1059; // -95°W (265°E in 0-360)
-  const lonEnd = 1399;   // -10°W (350°E in 0-360)
+  console.log(`[SST API] Fetching SST data for bounds: ${bounds.minLat}°N-${bounds.maxLat}°N, ${bounds.minLon}°-${bounds.maxLon}°`);
+  console.log(`[SST API] Grid indices: lat[${latStart}:${latEnd}], lon[${lonStart}:${lonEnd}]`);
+  console.log(`[SST API] Expected points: ${expectedPoints}`);
   
   const dataUrl = `https://psl.noaa.gov/thredds/dodsC/Datasets/noaa.oisst.v2.highres/sst.day.mean.${dataYear}.nc.ascii?` +
     `lat[${latStart}:1:${latEnd}],` +
     `lon[${lonStart}:1:${lonEnd}],` +
     `sst[${timeIndex}:1:${timeIndex}][${latStart}:1:${latEnd}][${lonStart}:1:${lonEnd}]`;
-
-  console.log('[SST API] Fetching SST data...');
-  console.log(`[SST API] Expected points: ${(latEnd - latStart + 1) * (lonEnd - lonStart + 1)}`);
+  
+  console.log(`[SST API] Fetching from: ${dataUrl.substring(0, 150)}...`);
+  console.log(`[SST API] This will fetch ${expectedPoints} points - this may take a while...`);
   
   const dataResponse = await fetch(dataUrl);
   if (!dataResponse.ok) {
@@ -112,12 +147,7 @@ async function fetchSSTDataFromNOAA(): Promise<SSTDataResponse> {
   return {
     date: dataDate.toISOString().split('T')[0],
     gridPoints: parsed.gridPoints,
-    bounds: {
-      minLat: 5,
-      maxLat: 45,
-      minLon: -95,
-      maxLon: -10
-    },
+    bounds: bounds,
     source: 'NOAA PSL OISST v2.1',
     pointCount: parsed.gridPoints.length
   };
@@ -133,7 +163,7 @@ function parseOPeNDAPAscii(asciiData: string): { gridPoints: SSTGridPoint[] } {
   // Extract lat, lon, and sst arrays
   let latitudes: number[] = [];
   let longitudes: number[] = [];
-  let sstValues: number[] = [];
+  const sstValues: number[] = [];
   
   for (const section of sections) {
     // Parse latitude array
@@ -193,11 +223,23 @@ function parseOPeNDAPAscii(asciiData: string): { gridPoints: SSTGridPoint[] } {
 
 /**
  * GET /api/sst-data
- * Returns SST data for Atlantic basin
+ * Returns global SST data (covers all basins)
  * Uses file-based cache with 24-hour TTL
  */
 export async function GET() {
   try {
+    // Global bounds covering all hurricane basins:
+    // Latitude: -40°S to 60°N (covers all basins from South Pacific to Western North Pacific)
+    // Longitude: -180° to 180° (full globe, covers wraparound basins like South Pacific)
+    const globalBounds: GeographicBounds = {
+      minLat: -40,
+      maxLat: 60,
+      minLon: -180,
+      maxLon: 180
+    };
+    
+    console.log('[SST API] Fetching global SST data (covers all basins)');
+    
     // Check cache first
     if (await isCacheValid()) {
       console.log('[SST API] Returning cached data');
@@ -208,30 +250,18 @@ export async function GET() {
       }
     }
     
-    // Fetch new data from NOAA
-    console.log('[SST API] Cache miss or invalid, fetching from NOAA');
-    const data = await fetchSSTDataFromNOAA();
+    // Fetch new global data from NOAA
+    console.log('[SST API] Cache miss or invalid, fetching global data from NOAA');
+    const data = await fetchSSTDataFromNOAA(globalBounds);
+    console.log(`[SST API] Successfully fetched ${data.pointCount} points`);
     
-    // Cache the result
+    // Cache the global result
     await writeCache(data);
+    console.log('[SST API] Data cached successfully');
     
     return NextResponse.json(data);
   } catch (error) {
     console.error('[SST API] Error:', error);
-    
-    // Try to return cached data even if expired
-    try {
-      console.log('[SST API] Attempting to use expired cache as fallback');
-      const cachedData = await readCache();
-      if (cachedData) {
-        return NextResponse.json({
-          ...cachedData,
-          warning: 'Using cached data due to fetch error'
-        });
-      }
-    } catch (cacheError) {
-      console.error('[SST API] Cache fallback also failed:', cacheError);
-    }
     
     return NextResponse.json(
       { error: 'Failed to fetch SST data', details: String(error) },
