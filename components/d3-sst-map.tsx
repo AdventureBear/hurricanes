@@ -9,6 +9,13 @@ import type { SSTDataResponse } from '../types/sst';
 import type { Basin, GeographicBounds } from '../types/geographic';
 import { createOceanographicScale } from './sst-color-legend';
 import basinsDataRaw from '../rules/basins.json';
+import { getSSTData } from '../app/actions/sst-data';
+
+/**
+ * DEFAULT PROJECTION: Mercator (geoMercator)
+ * This is the standard projection for tropical weather mapping and hurricane visualization.
+ * All geographic features (SST data, coastlines, graticules) use this projection.
+ */
 
 // Type assertion for imported JSON (tuples are inferred as number[])
 const basinsData = basinsDataRaw as Basin[];
@@ -62,6 +69,9 @@ export default function D3SSTMap({ width: propWidth, height: propHeight, onDataD
   const [filteredData, setFilteredData] = useState<SSTDataResponse | null>(null);
   const isRenderingRef = useRef(false);
   const hasFetchedRef = useRef(false);
+  // Store Mercator projection in ref to ensure consistency across async operations
+  const projectionRef = useRef<d3.GeoProjection | null>(null);
+  const pathGeneratorRef = useRef<d3.GeoPath | null>(null);
 
   // Update dimensions when basin changes or window resizes
   useEffect(() => {
@@ -122,13 +132,8 @@ export default function D3SSTMap({ width: propWidth, height: propHeight, onDataD
       setError(null);
       
       console.log('[Map] Starting fetch...');
-      const response = await fetch('/api/sst-data');
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-      }
-      
-      console.log('[Map] Response received, parsing...');
-      const jsonData: SSTDataResponse = await response.json();
+      // Use Server Action instead of API route
+      const jsonData: SSTDataResponse = await getSSTData();
       console.log(`[Map] Loaded ${jsonData.pointCount} global SST grid points`);
       setData(jsonData);
       // Notify parent component of data date
@@ -166,7 +171,9 @@ export default function D3SSTMap({ width: propWidth, height: propHeight, onDataD
     // Handle longitude wraparound (e.g., South Pacific: 160°E to -120°W)
     const filteredPoints = data.gridPoints.filter(p => {
       // Check SST validity
-      if (p.sst < 10 || p.sst > 35) return false;
+      // Allow temperatures from -2°C (sea ice areas) to 35°C (tropical maximum)
+      // NSST can have valid cold water temperatures, especially in high latitudes
+      if (p.sst < -2 || p.sst > 35) return false;
       
       // Check latitude
       if (p.lat < clipBounds.minLat || p.lat > clipBounds.maxLat) return false;
@@ -254,14 +261,25 @@ export default function D3SSTMap({ width: propWidth, height: propHeight, onDataD
     }
     
     // Set up Mercator projection - standard for tropical weather mapping
-    // Translate to account for padding
+    // This is the DEFAULT projection for this project
+    // Translate to account for padding - center the projection in the actual map area
+    // (not the full SVG, but the area excluding padding)
+    const mapCenterX = padding.left + mapWidth / 2;
+    const mapCenterY = padding.top + mapHeight / 2;
+    
     const projection = geoMercator()
       .center([centerLon, centerLat])
       .scale(scale)
-      .translate([width / 2, height / 2]);
+      .translate([mapCenterX, mapCenterY]);
+    
+    // Store projection in ref for consistent use across async operations (coastlines)
+    projectionRef.current = projection;
     
     // Create path generator ONCE with the projection - use for BOTH data and coastlines
     const pathGenerator = d3.geoPath(projection);
+    
+    // Store pathGenerator in ref for consistent use
+    pathGeneratorRef.current = pathGenerator;
 
     // Use oceanographic color scale
     const colorScale = createOceanographicScale();
@@ -340,12 +358,13 @@ export default function D3SSTMap({ width: propWidth, height: propHeight, onDataD
       .attr('y2', '0%');
     
     // Add gradient stops
-    const stops = d3.range(10, 32.5, 0.5);
+    // Extended range: -2°C to 35°C to handle cold water in high latitudes
+    const stops = d3.range(-2, 35.5, 0.5);
     legendGradient.selectAll('stop')
       .data(stops)
       .enter()
       .append('stop')
-      .attr('offset', d => `${((d - 10) / 22) * 100}%`)
+      .attr('offset', d => `${((d - (-2)) / (35 - (-2))) * 100}%`)
       .attr('stop-color', d => colorScale(d));
     
     // Draw gradient rectangle
@@ -360,8 +379,9 @@ export default function D3SSTMap({ width: propWidth, height: propHeight, onDataD
       .style('stroke-width', 1);
     
     // Add vertical axis for temperature labels
+    // Extended range to show cold water temperatures
     const yScale = d3.scaleLinear()
-      .domain([10, 32])
+      .domain([-2, 35])
       .range([legendY + legendHeight, legendY]);
     
     const yAxis = d3.axisRight(yScale)
@@ -521,8 +541,8 @@ export default function D3SSTMap({ width: propWidth, height: propHeight, onDataD
       console.log(`[Map] Flat array length: ${values.length}, expected: ${gridWidth * gridHeight}`);
       
       // Create contour generator
-      // Generate contours every 0.5°C from 10°C to 32°C
-      const contourThresholds = d3.range(10, 32.5, 0.5);
+      // Generate contours every 0.5°C from -2°C to 35°C (extended for cold water)
+      const contourThresholds = d3.range(-2, 35.5, 0.5);
       const contourGenerator = contours()
         .size([gridWidth, gridHeight])
         .thresholds(contourThresholds);
@@ -744,6 +764,15 @@ export default function D3SSTMap({ width: propWidth, height: propHeight, onDataD
         
         // Filter coastlines to only those that intersect with our bounds
         // This improves performance and ensures alignment
+        // IMPORTANT: At high latitudes (like Newfoundland ~47°N), Mercator distortion is significant
+        // We use a slightly expanded bounding box to ensure we don't miss features near edges
+        const expandedBounds = {
+          minLon: clipBounds.minLon - 2, // Expand by 2 degrees
+          maxLon: clipBounds.maxLon + 2,
+          minLat: clipBounds.minLat - 2,
+          maxLat: clipBounds.maxLat + 2
+        };
+        
         const filteredFeatures = features.filter(f => {
           if (f.geometry.type === 'Polygon' || f.geometry.type === 'MultiPolygon') {
             // Check if feature might intersect our bounds
@@ -753,6 +782,7 @@ export default function D3SSTMap({ width: propWidth, height: propHeight, onDataD
               : f.geometry.coordinates.flat()[0];
             
             if (coords && coords.length > 0) {
+              // GeoJSON/TopoJSON coordinates are [longitude, latitude]
               const lons = coords.map((c: number[]) => c[0]);
               const lats = coords.map((c: number[]) => c[1]);
               const minLon = Math.min(...lons);
@@ -760,16 +790,28 @@ export default function D3SSTMap({ width: propWidth, height: propHeight, onDataD
               const minLat = Math.min(...lats);
               const maxLat = Math.max(...lats);
               
-              // Check if bounding box overlaps with our clip bounds
-              return !(maxLon < clipBounds.minLon || minLon > clipBounds.maxLon ||
-                       maxLat < clipBounds.minLat || minLat > clipBounds.maxLat);
+              // Check if bounding box overlaps with our expanded clip bounds
+              // This ensures we capture features that might be slightly outside due to projection distortion
+              return !(maxLon < expandedBounds.minLon || minLon > expandedBounds.maxLon ||
+                       maxLat < expandedBounds.minLat || minLat > expandedBounds.maxLat);
             }
           }
           return false;
         });
         
+        console.log(`[Map] Filtered ${filteredFeatures.length} coastline features from ${features.length} total (bounds: ${clipBounds.minLat}°N-${clipBounds.maxLat}°N, ${clipBounds.minLon}°-${clipBounds.maxLon}°)`);
+        
         // Render coastlines using the SAME projection and clipping
+        // Use the projection from ref to ensure it matches the SST data projection
         // Render AFTER grid cells so coastlines appear on top
+        const currentPathGenerator = pathGeneratorRef.current;
+        const currentProjection = projectionRef.current;
+        
+        if (!currentPathGenerator || !currentProjection) {
+          console.error('[Map] Projection or pathGenerator not available for coastlines');
+          return;
+        }
+        
         g.append('g')
           .attr('class', 'coastlines')
           .selectAll('path')
@@ -777,8 +819,8 @@ export default function D3SSTMap({ width: propWidth, height: propHeight, onDataD
           .enter()
           .append('path')
           .attr('d', d => {
-            // Use the exact same pathGenerator with the same projection
-            return pathGenerator(d as GeoJSON.Feature);
+            // Use the exact same pathGenerator from ref (uses same projection as SST data)
+            return currentPathGenerator(d as GeoJSON.Feature);
           })
           .attr('fill', 'none') // No land fill - just outlines
           .attr('stroke', '#333')
@@ -798,7 +840,7 @@ export default function D3SSTMap({ width: propWidth, height: propHeight, onDataD
         <div className="text-center">
           <div className="animate-spin rounded-full h-16 w-16 border-b-2 border-blue-600 mx-auto mb-4"></div>
           <p className="text-gray-600">Loading SST data...</p>
-          <p className="text-sm text-gray-500 mt-2">Fetching ~45,000 grid points from NOAA</p>
+          <p className="text-sm text-gray-500 mt-2">Fetching sea surface temperature data from NOAA NOMADS</p>
         </div>
       </div>
     );

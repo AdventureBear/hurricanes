@@ -8,11 +8,23 @@ interface SSTColorLegendProps {
   height?: number;
 }
 
-// Custom oceanographic color scale: blue → cyan → green → yellow → orange → red
+// Custom oceanographic color scale: dark blue (cold) → blue → cyan → green → yellow → orange → red (warm)
+// Extended to handle cold water temperatures in high latitudes (-2°C to 35°C)
 const createOceanographicScale = () => {
   return d3.scaleLinear<string>()
-    .domain([10, 15, 20, 24, 27, 30, 32])
-    .range(['#2c7bb6', '#00cccc', '#00ff00', '#ffff00', '#ff9900', '#ff0000', '#800000'])
+    .domain([-2, 5, 10, 15, 20, 24, 27, 30, 32, 35])
+    .range([
+      '#1a237e',  // Very dark blue (near freezing, sea ice areas)
+      '#283593',  // Dark blue (cold water)
+      '#2c7bb6',  // Medium blue
+      '#00cccc',  // Cyan
+      '#00ff00',  // Green
+      '#ffff00',  // Yellow
+      '#ff9900',  // Orange
+      '#ff0000',  // Red
+      '#cc0000',  // Dark red
+      '#800000'   // Maroon (very warm)
+    ])
     .interpolate(d3.interpolateRgb);
 };
 
@@ -38,12 +50,13 @@ export default function SSTColorLegend({ width = 80, height = 400 }: SSTColorLeg
       .attr('y2', '0%');
 
     // Add gradient stops (reversed for vertical orientation - cold at bottom, warm at top)
-    const stops = d3.range(10, 32.5, 0.5);
+    // Extended range: -2°C to 35°C to handle cold water in high latitudes
+    const stops = d3.range(-2, 35.5, 0.5);
     linearGradient.selectAll('stop')
       .data(stops)
       .enter()
       .append('stop')
-      .attr('offset', d => `${((d - 10) / 22) * 100}%`)
+      .attr('offset', d => `${((d - (-2)) / (35 - (-2))) * 100}%`)
       .attr('stop-color', d => colorScale(d));
 
     // Draw gradient rectangle - no margins, full height
@@ -61,8 +74,9 @@ export default function SSTColorLegend({ width = 80, height = 400 }: SSTColorLeg
       .style('stroke-width', 1);
 
     // Add vertical axis
+    // Extended range to show cold water temperatures
     const yScale = d3.scaleLinear()
-      .domain([10, 32])
+      .domain([-2, 35])
       .range([height, 0]); // Full height range
 
     const yAxis = d3.axisRight(yScale)

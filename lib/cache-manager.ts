@@ -36,68 +36,18 @@ function getCacheFilePath(date: Date = new Date()): string {
 }
 
 /**
- * Gets the latest available data date from NOAA (without fetching full data)
+ * Gets the latest available NSST data date from NOMADS
  * Returns the date string (YYYY-MM-DD) or null if unable to determine
- * NOTE: This only fetches metadata (time dimension), NOT the full SST dataset
+ * NOTE: This is a lightweight check, not a full data fetch
+ * 
+ * DEPRECATED: This function is no longer used since NSST date detection
+ * is handled in nsst-url-builder.ts. Kept for reference only.
  */
 async function getLatestAvailableDataDate(): Promise<string | null> {
-  try {
-    console.log('[Cache] Checking NOAA metadata for latest available date (lightweight check, not fetching full data)...');
-    const now = new Date();
-    const currentYear = now.getFullYear();
-    const previousYear = currentYear - 1;
-    
-    // Try current year first
-    let dataYear = currentYear;
-    let metadataUrl = `https://psl.noaa.gov/thredds/dodsC/Datasets/noaa.oisst.v2.highres/sst.day.mean.${dataYear}.nc.ascii?time`;
-    
-    let metadataResponse = await fetch(metadataUrl);
-    
-    // If current year fails, try previous year
-    if (!metadataResponse.ok) {
-      dataYear = previousYear;
-      metadataUrl = `https://psl.noaa.gov/thredds/dodsC/Datasets/noaa.oisst.v2.highres/sst.day.mean.${dataYear}.nc.ascii?time`;
-      metadataResponse = await fetch(metadataUrl);
-    }
-    
-    if (!metadataResponse.ok) {
-      console.log('[Cache] Could not fetch metadata to determine latest date');
-      return null;
-    }
-    
-    const metadataText = await metadataResponse.text();
-    
-    // Parse the time dimension size
-    const timeSizeMatch = metadataText.match(/time\[time\s*=\s*(\d+)\]/);
-    const timeSize = timeSizeMatch ? parseInt(timeSizeMatch[1]) : 0;
-    const maxTimeIndex = timeSize > 0 ? timeSize - 1 : 0;
-    
-    // Use latest available date (accounting for 2-day lag)
-    const timeIndex = Math.max(0, maxTimeIndex - 2);
-    
-    // Fetch the actual time value (still just metadata, not full data)
-    const timeValueUrl = `https://psl.noaa.gov/thredds/dodsC/Datasets/noaa.oisst.v2.highres/sst.day.mean.${dataYear}.nc.ascii?time[${timeIndex}:1:${timeIndex}]`;
-    const timeValueResponse = await fetch(timeValueUrl);
-    const timeValueText = await timeValueResponse.text();
-    
-    // Extract time value - OISST uses days since 1800-01-01 00:00:00 UTC
-    const timeValueMatch = timeValueText.match(/time\[1\]\s+([\d.]+)/);
-    const daysSince1800 = timeValueMatch ? parseFloat(timeValueMatch[1]) : null;
-    
-    if (daysSince1800 !== null && !isNaN(daysSince1800)) {
-      const baseDate = new Date(Date.UTC(1800, 0, 1, 0, 0, 0, 0));
-      const millisecondsSince1800 = daysSince1800 * 24 * 60 * 60 * 1000;
-      const dataDate = new Date(baseDate.getTime() + millisecondsSince1800);
-      const dateString = dataDate.toISOString().split('T')[0];
-      console.log(`[Cache] Latest available date from NOAA: ${dateString} (metadata check only, no full data fetch)`);
-      return dateString;
-    }
-    
-    return null;
-  } catch (error) {
-    console.error('[Cache] Error fetching latest data date:', error);
-    return null;
-  }
+  // NSST date detection is now handled in nsst-url-builder.ts
+  // This function is deprecated and should not be called
+  console.log('[Cache] getLatestAvailableDataDate() is deprecated - NSST date detection handled elsewhere');
+  return null;
 }
 
 /**
@@ -159,9 +109,10 @@ export async function isCacheValid(date: Date = new Date()): Promise<boolean> {
       return true;
     }
     
-    // Only check NOAA if it's been a while since last check
-    console.log(`[Cache] Last check was ${Math.round(timeSinceLastCheck / (60 * 60 * 1000))} hours ago, checking NOAA for newer data...`);
-    const latestAvailableDate = await getLatestAvailableDataDate();
+    // For NSST, date checking is handled in nsst-fetcher.ts
+    // We just check if cache is less than 24 hours old
+    console.log(`[Cache] Last check was ${Math.round(timeSinceLastCheck / (60 * 60 * 1000))} hours ago`);
+    console.log(`[Cache] NSST date checking handled by nsst-fetcher.ts - using cache age validation only`);
     
     // Update lastChecked timestamp
     latestCache.lastChecked = now;
@@ -169,22 +120,17 @@ export async function isCacheValid(date: Date = new Date()): Promise<boolean> {
     const cachePath = path.join(CACHE_DIR, latestCache.filename);
     await fs.writeFile(cachePath, JSON.stringify(latestCache, null, 2), 'utf-8');
     
-    if (!latestAvailableDate) {
-      // If we can't determine latest date, assume cache is still valid
-      console.log(`[Cache] Unable to verify latest date, using cache`);
-      return true;
+    // For NSST, cache is valid if it's less than 24 hours old
+    const cacheAge = now - latestCache.timestamp;
+    const maxCacheAge = 24 * 60 * 60 * 1000; // 24 hours
+    
+    if (cacheAge >= maxCacheAge) {
+      console.log(`[Cache] Cache is ${Math.round(cacheAge / (60 * 60 * 1000))} hours old, invalidating`);
+      return false;
     }
     
-    // Compare cached date to latest available date
-    const isValid = cachedDate >= latestAvailableDate;
-    
-    if (isValid) {
-      console.log(`[Cache] Valid cache: cached date (${cachedDate}) >= latest available (${latestAvailableDate})`);
-    } else {
-      console.log(`[Cache] Cache is outdated: cached date (${cachedDate}) < latest available (${latestAvailableDate})`);
-    }
-    
-    return isValid;
+    console.log(`[Cache] Cache is valid (${Math.round(cacheAge / (60 * 60 * 1000))} hours old)`);
+    return true;
   } catch (error) {
     // File doesn't exist or other error
     console.log('[Cache] No valid cache found:', error);

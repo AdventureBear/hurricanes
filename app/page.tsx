@@ -18,7 +18,7 @@ export default function Home() {
             Atlantic Basin Sea Surface Temperature
           </p>
           <p className="text-xs text-gray-500">
-            Data from NOAA Physical Sciences Laboratory OISST v2.1 (0.25° resolution)
+            Data from NOAA NOMADS NSST (Near-surface Sea Surface Temperature, 0.25° resolution)
           </p>
         </header>
 
