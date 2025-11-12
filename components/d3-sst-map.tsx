@@ -7,7 +7,7 @@ import { contours } from 'd3-contour';
 import * as topojson from 'topojson-client';
 import type { SSTDataResponse } from '../types/sst';
 import type { Basin, GeographicBounds } from '../types/geographic';
-import SSTColorLegend, { createOceanographicScale } from './sst-color-legend';
+import { createOceanographicScale } from './sst-color-legend';
 import basinsDataRaw from '../rules/basins.json';
 
 // Type assertion for imported JSON (tuples are inferred as number[])
@@ -16,6 +16,7 @@ const basinsData = basinsDataRaw as Basin[];
 interface D3SSTMapProps {
   width?: number;
   height?: number;
+  onDataDateChange?: (date: string | null) => void;
 }
 
 type VisualizationMode = 'gridded' | 'contour';
@@ -34,35 +35,12 @@ function basinToBounds(basin: Basin): GeographicBounds {
   };
 }
 
-export default function D3SSTMap({ width: propWidth, height: propHeight }: D3SSTMapProps) {
+export default function D3SSTMap({ width: propWidth, height: propHeight, onDataDateChange }: D3SSTMapProps) {
   // Responsive sizing
   const [dimensions, setDimensions] = useState({
     width: propWidth || 1200,
     height: propHeight || 700
   });
-  
-  useEffect(() => {
-    const updateDimensions = () => {
-      const container = document.getElementById('map-container');
-      if (container) {
-        const containerWidth = container.clientWidth;
-        // Use container width minus padding, with max width constraint
-        const maxWidth = 1400;
-        const padding = 32; // Account for container padding
-        const calculatedWidth = Math.min(containerWidth - padding, maxWidth);
-        const calculatedHeight = Math.round(calculatedWidth * 0.583); // Maintain ~7:12 aspect ratio
-        
-        setDimensions({
-          width: calculatedWidth || propWidth || 1200,
-          height: calculatedHeight || propHeight || 700
-        });
-      }
-    };
-    
-    updateDimensions();
-    window.addEventListener('resize', updateDimensions);
-    return () => window.removeEventListener('resize', updateDimensions);
-  }, [propWidth, propHeight]);
   
   const { width, height } = dimensions;
   const svgRef = useRef<SVGSVGElement>(null);
@@ -81,10 +59,53 @@ export default function D3SSTMap({ width: propWidth, height: propHeight }: D3SST
     y: number;
     content: string;
   }>({ show: false, x: 0, y: 0, content: '' });
-  const [mapBounds, setMapBounds] = useState<{ top: number; bottom: number; height: number } | null>(null);
   const [filteredData, setFilteredData] = useState<SSTDataResponse | null>(null);
   const isRenderingRef = useRef(false);
   const hasFetchedRef = useRef(false);
+
+  // Update dimensions when basin changes or window resizes
+  useEffect(() => {
+    const updateDimensions = () => {
+      const container = document.getElementById('map-container');
+      if (!container) return;
+      
+      const containerWidth = container.clientWidth;
+      const maxWidth = 1400;
+      const padding = 16; // Account for reduced container padding (p-2 = 8px * 2)
+      const legendSpace = 100; // Space for legend (90px + 10px gap)
+      const availableWidth = Math.min(containerWidth - padding - legendSpace, maxWidth);
+      
+      // Calculate aspect ratio based on selected basin's geographic bounds
+      let aspectRatio = 0.583; // Default aspect ratio
+      if (selectedBasin) {
+        const clipBounds = basinToBounds(selectedBasin);
+        const lonRange = clipBounds.maxLon - clipBounds.minLon;
+        const latRange = clipBounds.maxLat - clipBounds.minLat;
+        
+        // Account for Mercator projection distortion at higher latitudes
+        // Use average latitude for better approximation
+        const avgLat = (clipBounds.minLat + clipBounds.maxLat) / 2;
+        const latCorrection = Math.cos((avgLat * Math.PI) / 180);
+        
+        // Geographic aspect ratio adjusted for Mercator
+        const geographicAspectRatio = (lonRange * latCorrection) / latRange;
+        aspectRatio = geographicAspectRatio;
+      }
+      
+      // Calculate dimensions based on basin aspect ratio
+      const calculatedWidth = availableWidth;
+      const calculatedHeight = Math.round(calculatedWidth / aspectRatio);
+      
+      setDimensions({
+        width: calculatedWidth + legendSpace || propWidth || 1200, // Include legend in total width
+        height: calculatedHeight || propHeight || 700
+      });
+    };
+    
+    updateDimensions();
+    window.addEventListener('resize', updateDimensions);
+    return () => window.removeEventListener('resize', updateDimensions);
+  }, [propWidth, propHeight, selectedBasin]);
 
   // Fetch global SST data (covers all basins) - only fetch once
   const fetchData = useCallback(async () => {
@@ -110,6 +131,10 @@ export default function D3SSTMap({ width: propWidth, height: propHeight }: D3SST
       const jsonData: SSTDataResponse = await response.json();
       console.log(`[Map] Loaded ${jsonData.pointCount} global SST grid points`);
       setData(jsonData);
+      // Notify parent component of data date
+      if (onDataDateChange) {
+        onDataDateChange(jsonData.date);
+      }
     } catch (err) {
       console.error('[Map] Error fetching SST data:', err);
       setError(String(err));
@@ -118,7 +143,7 @@ export default function D3SSTMap({ width: propWidth, height: propHeight }: D3SST
       setLoading(false);
       setRefreshing(false);
     }
-  }, []); // Only fetch once on mount
+  }, [onDataDateChange]); // Include callback in dependencies
 
   // Fetch global data once on mount
   useEffect(() => {
@@ -166,6 +191,7 @@ export default function D3SSTMap({ width: propWidth, height: propHeight }: D3SST
     });
   }, [data, selectedBasin]);
 
+
   // Refresh handler
   const handleRefresh = () => {
     hasFetchedRef.current = false; // Allow refetch
@@ -193,10 +219,10 @@ export default function D3SSTMap({ width: propWidth, height: propHeight }: D3SST
     svg.selectAll('*').remove(); // Clear previous render
 
     // Define padding for graticule labels (responsive - scales with map size)
-    // Top/bottom for longitude labels, left for latitude labels, right for legend
+    // Bottom for longitude labels, left for latitude labels, right for legend
     const basePadding = Math.min(width, height) * 0.03; // 3% of smaller dimension
     const padding = {
-      top: Math.max(20, basePadding),    // Space for top longitude labels (min 20px)
+      top: 0,    // No top labels
       bottom: Math.max(20, basePadding), // Space for bottom longitude labels (min 20px)
       left: Math.max(35, basePadding * 1.5),   // Space for left latitude labels (min 35px)
       right: 0    // No padding on right - legend will be positioned outside SVG
@@ -298,12 +324,69 @@ export default function D3SSTMap({ width: propWidth, height: propHeight }: D3SST
       .attr('stroke', '#000000')
       .attr('stroke-width', 2);
     
-    // Store the map bounds for legend alignment
-    setMapBounds({
-      top: clipY,
-      bottom: clipY + clipHeight,
-      height: clipHeight
-    });
+    // Render color legend directly in the SVG (right side, aligned with map border)
+    const legendGroup = svg.append('g').attr('class', 'sst-legend');
+    const legendWidth = 90;
+    const legendX = clipX + clipWidth + 5; // 5px gap from map border
+    const legendY = clipY;
+    const legendHeight = clipHeight;
+    
+    // Create gradient for legend
+    const legendGradient = defs.append('linearGradient')
+      .attr('id', 'legend-gradient')
+      .attr('x1', '0%')
+      .attr('y1', '100%')
+      .attr('x2', '0%')
+      .attr('y2', '0%');
+    
+    // Add gradient stops
+    const stops = d3.range(10, 32.5, 0.5);
+    legendGradient.selectAll('stop')
+      .data(stops)
+      .enter()
+      .append('stop')
+      .attr('offset', d => `${((d - 10) / 22) * 100}%`)
+      .attr('stop-color', d => colorScale(d));
+    
+    // Draw gradient rectangle
+    const gradientRectWidth = 30;
+    legendGroup.append('rect')
+      .attr('x', legendX + 10)
+      .attr('y', legendY)
+      .attr('width', gradientRectWidth)
+      .attr('height', legendHeight)
+      .style('fill', 'url(#legend-gradient)')
+      .style('stroke', '#333')
+      .style('stroke-width', 1);
+    
+    // Add vertical axis for temperature labels
+    const yScale = d3.scaleLinear()
+      .domain([10, 32])
+      .range([legendY + legendHeight, legendY]);
+    
+    const yAxis = d3.axisRight(yScale)
+      .ticks(11)
+      .tickFormat(d => `${d}°C`);
+    
+    const axisGroup = legendGroup.append('g')
+      .attr('transform', `translate(${legendX + 10 + gradientRectWidth}, 0)`)
+      .call(yAxis)
+      .style('font-size', '11px')
+      .style('font-weight', '500')
+      .style('fill', '#000000');
+    
+    // Remove the axis domain line
+    axisGroup.select('.domain').remove();
+    
+    // Ensure tick labels are visible
+    axisGroup.selectAll('text')
+      .style('fill', '#000000')
+      .style('overflow', 'visible');
+    
+    // Update SVG width and viewBox to accommodate legend
+    const totalWidth = legendX + legendWidth;
+    svg.attr('width', totalWidth)
+       .attr('viewBox', `0 0 ${totalWidth} ${height}`);
     
     // Add graticule labels (outside the map border)
     // Create a separate group for labels that won't be clipped
@@ -316,7 +399,7 @@ export default function D3SSTMap({ width: propWidth, height: propHeight }: D3SST
       const [x, y] = projection([clipBounds.minLon, lat]) || [0, 0];
       
       // Left side label (outside border, within padding area)
-      if (x >= padding.left && y >= padding.top && y <= height - padding.bottom) {
+      if (x >= padding.left && y >= 0 && y <= height - padding.bottom) {
         labelGroup.append('text')
           .attr('x', clipX - 8)
           .attr('y', y)
@@ -329,32 +412,18 @@ export default function D3SSTMap({ width: propWidth, height: propHeight }: D3SST
       }
     });
     
-    // Generate longitude labels (on top and bottom, outside border)
+    // Generate longitude labels (on bottom only, outside border)
     const lonLines = d3.range(Math.ceil(clipBounds.minLon / 5) * 5, clipBounds.maxLon + 5, 5);
     lonLines.forEach(lon => {
       const [x, y] = projection([lon, clipBounds.minLat]) || [0, 0];
-      const [xTop, yTop] = projection([lon, clipBounds.maxLat]) || [0, 0];
       
-      // Bottom label (outside border, within padding area)
-      if (x >= padding.left && x <= width - padding.right && y >= padding.top) {
+      // Bottom label only (outside border, within padding area)
+      if (x >= padding.left && x <= width - padding.right && y >= 0) {
         labelGroup.append('text')
           .attr('x', x)
           .attr('y', clipY + clipHeight + 18)
           .attr('text-anchor', 'middle')
           .attr('alignment-baseline', 'hanging')
-          .style('font-size', '10px')
-          .style('fill', '#000000')
-          .style('font-weight', '500')
-          .text(`${lon < 0 ? Math.abs(lon) + '°W' : lon === 0 ? '0°' : lon + '°E'}`);
-      }
-      
-      // Top label (outside border, within padding area)
-      if (xTop >= padding.left && xTop <= width - padding.right && yTop >= padding.top) {
-        labelGroup.append('text')
-          .attr('x', xTop)
-          .attr('y', clipY - 8)
-          .attr('text-anchor', 'middle')
-          .attr('alignment-baseline', 'baseline')
           .style('font-size', '10px')
           .style('fill', '#000000')
           .style('font-weight', '500')
@@ -747,103 +816,92 @@ export default function D3SSTMap({ width: propWidth, height: propHeight }: D3SST
   }
 
   return (
-    <div className="relative w-full" id="map-container">
-      {/* Controls */}
+    <div className="relative w-full max-w-full" id="map-container">
+      {/* Map and Legend Container - Single SVG contains both */}
+      <div className="bg-white rounded-lg border border-gray-300 p-2 shadow-lg" style={{ overflow: 'visible', maxWidth: '100%' }}>
+        <svg
+          ref={svgRef}
+          width={width}
+          height={height}
+          className="bg-white"
+          style={{ display: 'block', width: '100%', maxWidth: '100%', height: 'auto', overflow: 'visible' }}
+          preserveAspectRatio="xMidYMid meet"
+        />
+      </div>
+      
+      {/* Combined Controls - Basin Selector and Visualization Controls */}
       {data && (
-        <div className="mb-4 flex flex-col sm:flex-row items-start sm:items-center gap-4 bg-white rounded-lg border border-gray-300 p-3 shadow-sm">
-          {/* Basin Selector */}
-          <div className="flex items-center gap-3 flex-shrink-0">
-            <label htmlFor="basin-select" className="text-sm font-medium text-gray-700">
-              Basin:
-            </label>
-            <select
-              id="basin-select"
-              value={selectedBasin.basin}
-              onChange={(e) => {
-                const basin = basinsData.find(b => b.basin === e.target.value);
-                if (basin) setSelectedBasin(basin);
-              }}
-              className="px-3 py-1.5 text-sm border border-gray-300 rounded-lg bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-            >
-              {basinsData.map(basin => (
-                <option key={basin.basin} value={basin.basin}>
-                  {basin.basin}
-                </option>
-              ))}
-            </select>
-          </div>
-          
-          {/* Visualization Mode Switch */}
-          <div className="flex items-center gap-3 flex-shrink-0">
-            <span className="text-sm font-medium text-gray-700">Visualization:</span>
-            <label className="relative inline-flex items-center cursor-pointer">
-              <input
-                type="checkbox"
-                checked={visualizationMode === 'contour'}
-                onChange={(e) => setVisualizationMode(e.target.checked ? 'contour' : 'gridded')}
-                className="sr-only peer"
-              />
-              <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
-              <span className="ml-3 text-sm font-medium text-gray-700">
-                {visualizationMode === 'gridded' ? 'Gridded' : 'Contour'}
-              </span>
-            </label>
-          </div>
-          
-          {/* Contour Lines Toggle (only show in contour mode) */}
-          {visualizationMode === 'contour' && (
-            <div className="flex items-center gap-3 border-l border-gray-300 pl-4 sm:pl-6 flex-shrink-0">
-              <span className="text-sm font-medium text-gray-700">Contour Lines:</span>
+        <div className="mt-0 flex flex-col sm:flex-row items-start sm:items-center gap-4 flex-wrap justify-between bg-white rounded-lg border border-gray-300 p-2 shadow-sm">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 flex-wrap">
+            {/* Basin Selector */}
+            <div className="flex items-center gap-3">
+              <label htmlFor="basin-select" className="text-sm font-medium text-gray-700">
+                Basin:
+              </label>
+              <select
+                id="basin-select"
+                value={selectedBasin.basin}
+                onChange={(e) => {
+                  const basin = basinsData.find(b => b.basin === e.target.value);
+                  if (basin) setSelectedBasin(basin);
+                }}
+                className="px-3 py-1.5 text-sm border border-gray-300 rounded-lg bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              >
+                {basinsData.map(basin => (
+                  <option key={basin.basin} value={basin.basin}>
+                    {basin.basin}
+                  </option>
+                ))}
+              </select>
+            </div>
+            
+            {/* Visualization Mode Switch */}
+            <div className="flex items-center gap-3 border-l border-gray-300 pl-4 sm:pl-6">
+              <span className="text-sm font-medium text-gray-700">Visualization:</span>
               <label className="relative inline-flex items-center cursor-pointer">
                 <input
                   type="checkbox"
-                  checked={showContourLines}
-                  onChange={(e) => setShowContourLines(e.target.checked)}
+                  checked={visualizationMode === 'contour'}
+                  onChange={(e) => setVisualizationMode(e.target.checked ? 'contour' : 'gridded')}
                   className="sr-only peer"
                 />
                 <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
                 <span className="ml-3 text-sm font-medium text-gray-700">
-                  {showContourLines ? 'On' : 'Off'}
+                  {visualizationMode === 'gridded' ? 'Gridded' : 'Contour'}
                 </span>
               </label>
             </div>
-          )}
-        </div>
-      )}
-      
-      {/* Map and Legend Container */}
-      <div className="flex flex-col sm:flex-row gap-4 items-start bg-white rounded-lg border border-gray-300 p-4 shadow-lg" style={{ overflow: 'visible' }}>
-        <div className="relative w-full" style={{ overflow: 'visible' }}>
-          <div className="relative inline-block" style={{ overflow: 'visible' }}>
-            <svg
-              ref={svgRef}
-              width={width}
-              height={height}
-              className="bg-white"
-              style={{ display: 'block', maxWidth: '100%', height: 'auto', overflow: 'visible' }}
-              viewBox={`0 0 ${width} ${height}`}
-              preserveAspectRatio="xMidYMid meet"
-            />
             
-            {/* Vertical Legend on Right - flush against map border, perfectly aligned */}
-            {data && mapBounds && (
-              <div 
-                className="absolute flex-shrink-0"
-                style={{ 
-                  left: `${width}px`,
-                  top: `${mapBounds.top}px`, 
-                  height: `${mapBounds.height}px`, 
-                  overflow: 'visible',
-                  marginLeft: '0px', // No gap between map and legend
-                  zIndex: 10
-                }}
-              >
-                <SSTColorLegend width={90} height={mapBounds.height} />
+            {/* Contour Lines Toggle (only show in contour mode) */}
+            {visualizationMode === 'contour' && (
+              <div className="flex items-center gap-3 border-l border-gray-300 pl-4 sm:pl-6">
+                <span className="text-sm font-medium text-gray-700">Contour Lines:</span>
+                <label className="relative inline-flex items-center cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={showContourLines}
+                    onChange={(e) => setShowContourLines(e.target.checked)}
+                    className="sr-only peer"
+                  />
+                  <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                  <span className="ml-3 text-sm font-medium text-gray-700">
+                    {showContourLines ? 'On' : 'Off'}
+                  </span>
+                </label>
               </div>
             )}
           </div>
+          
+          {/* Refresh Button */}
+          <button
+            onClick={handleRefresh}
+            disabled={refreshing}
+            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors font-medium shadow-sm text-sm"
+          >
+            {refreshing ? 'Refreshing...' : 'Refresh Data'}
+          </button>
         </div>
-      </div>
+      )}
       
       {/* Tooltip */}
       {tooltip.show && (
@@ -859,23 +917,6 @@ export default function D3SSTMap({ width: propWidth, height: propHeight }: D3SST
         </div>
       )}
 
-      {/* Data info and refresh - with better contrast */}
-      {data && (
-        <div className="mt-4 flex items-center justify-between bg-white rounded-lg border border-gray-300 p-4 shadow-sm">
-          <div className="text-sm text-gray-900">
-            <p><strong className="text-gray-700">Data Date:</strong> {data.date}</p>
-            <p><strong className="text-gray-700">Grid Points:</strong> {data ? data.pointCount.toLocaleString() : '0'} (Global: {data?.pointCount.toLocaleString() || '0'}, Filtered: {filteredData?.pointCount.toLocaleString() || '0'})</p>
-            <p><strong className="text-gray-700">Source:</strong> {data.source}</p>
-          </div>
-          <button
-            onClick={handleRefresh}
-            disabled={refreshing}
-            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors font-medium shadow-sm"
-          >
-            {refreshing ? 'Refreshing...' : 'Refresh Data'}
-          </button>
-        </div>
-      )}
     </div>
   );
 }

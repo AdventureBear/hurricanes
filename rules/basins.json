@@ -66,8 +66,8 @@
     "basin": "Southwestern Pacific",
     "coordinates": {
       "topleft": [0.0, 140.0],
-      "topright": [0.0, -170.0],
-      "bottomright": [-40.0, -170.0],
+      "topright": [0.0, 180.0],
+      "bottomright": [-40.0, 180.0],
       "bottomleft": [-40.0, 140.0]
     }
   },
