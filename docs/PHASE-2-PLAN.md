@@ -131,49 +131,65 @@ const result = calculatePI(profile);
 - `docs/EMANUEL-FORMULA-IMPLEMENTATION.md` (detailed documentation of method)
 
 **Success Criteria**: 
-- ✅ Complete Emanuel's formula implemented (no simplifications)
-- ✅ Results match published Emanuel's formula calculations
-- ✅ All equations documented with references
-- ✅ Validation test suite passes
-- ✅ Code is reviewable by experts
+- Complete Emanuel's formula implemented (no simplifications)
+- Results match published Emanuel's formula calculations
+- All equations documented with references
+- Validation test suite passes
+- Code is reviewable by experts
 
 ---
 
 ### **Task 2.2: Atmospheric Data - GRIB2/NOMADS or THREDDS/OPeNDAP Implementation**
-**Priority**: High | **Estimated Time**: 6-10 hours (longer if GRIB2 approach)
+**Priority**: High | **Estimated Time**: 6-10 hours (longer if GRIB2 approach)  
+**Status**: [x] Complete (Infrastructure complete, testing passing)
 
-**Decision Point**: Choose between:
-- **Option A**: GRIB2 from NOMADS (consistent with NSST, more efficient, already have infrastructure)
-- **Option B**: THREDDS/OPeNDAP (simpler parsing, but different from NSST approach)
-
-**Recommendation**: Consider GRIB2 for consistency, but THREDDS is acceptable if simpler.
+**Decision**: [x] **GRIB2 from NOMADS** - Chosen for consistency with NSST migration, more efficient, and leverages existing infrastructure.
 
 **Subtasks**:
-- [ ] Research available atmospheric data sources:
-  - NOMADS GRIB2 (GFS atmospheric data)
-  - THREDDS/OPeNDAP datasets for GFS atmospheric data
-- [ ] Decide on data source (GRIB2 vs OPeNDAP)
-- [ ] Create Server Action: `app/actions/atmospheric-data.ts` (not API route)
-- [ ] Implement `fetchAtmosphericData()` function:
+- [x] Research available atmospheric data sources:
+  - NOMADS GRIB2 (GFS atmospheric data) [x] Selected
+  - THREDDS/OPeNDAP datasets for GFS atmospheric data (considered)
+- [x] Decide on data source (GRIB2 vs OPeNDAP) [x] GRIB2 from NOMADS
+- [x] Create Server Action: `app/actions/atmospheric-data.ts` (not API route)
+- [x] Implement `fetchAtmosphericData()` function:
   - Accept bounds or grid points
   - Fetch **complete vertical profile** (all levels required for complete Emanuel's formula):
-    - Temperature: surface, 850mb, 700mb, 500mb, 400mb, 300mb, 250mb, 200mb, 150mb, 100mb (and any other levels required)
-    - Relative humidity: surface, 850mb, 700mb, 500mb, 400mb, 300mb (and any other levels required)
+    - Temperature: surface, 850mb, 700mb, 500mb, 400mb, 300mb, 250mb, 200mb, 150mb, 100mb
+    - Relative humidity: surface, 850mb, 700mb, 500mb, 400mb, 300mb
     - Pressure: surface and all standard levels
-    - Wind: if needed for complete Emanuel's formula
+    - Wind: if needed for complete Emanuel's formula (not needed for Emanuel's formula)
   - **Note**: Must fetch ALL levels required by complete Emanuel's method - no shortcuts
-- [ ] Parse data format:
-  - If GRIB2: Use Python script (similar to NSST) or GRIB2 library
-  - If OPeNDAP: Parse ASCII format (similar to old SST parser)
-- [ ] Add TypeScript types matching `AtmosphericProfile` (complete vertical profile)
-- [ ] Implement caching with 6-hour minimum TTL:
+- [x] Parse data format:
+  - GRIB2: Python script (`scripts/extract-atmospheric-data.py`) using pygrib
+  - Uses venv Python (`.venv/bin/python`) if available
+- [x] Add TypeScript types matching `AtmosphericProfile` (complete vertical profile)
+- [x] Implement caching with 6-hour minimum TTL:
   - Check if we fetched within last 6 hours
   - If fetched within last 20 minutes, use cache without checking
   - Similar pattern to NSST cache manager
-- [ ] Add error handling for invalid coordinates and network failures
-- [ ] Add comprehensive logging (similar to NSST implementation)
-- [ ] Support subset of grid points for testing (can scale down initially)
-- [ ] Document data source, resolution, and any limitations
+- [x] Add error handling for invalid coordinates and network failures
+- [x] Add comprehensive logging (similar to NSST implementation)
+- [x] Support subset of grid points for testing (can scale down initially)
+- [x] Document data source, resolution, and any limitations
+- [x] Complete testing and validation (Test suite passing)
+
+**Files Created**:
+- [x] `lib/gfs-url-builder.ts` - GFS URL construction and date detection
+- [x] `scripts/extract-atmospheric-data.py` - Python script for GRIB2 extraction
+- [x] `scripts/inspect-gfs-grib2.py` - Debug script for GRIB2 inspection
+- [x] `lib/atmospheric-grib2-parser.ts` - Node.js wrapper for Python extraction
+- [x] `lib/atmospheric-fetcher.ts` - Main atmospheric data fetcher
+- [x] `app/actions/atmospheric-data.ts` - Server Action for atmospheric data
+- [x] `scripts/test-atmospheric-fetch.ts` - Test suite for atmospheric data fetching
+
+**Current Status** (November 12, 2025):
+- [x] GRIB2 download and caching working (69.16 MB downloaded successfully)
+- [x] Python dependencies installed in venv (pygrib 2.1.6)
+- [x] Infrastructure complete (URL builder, fetcher, parser, Server Action)
+- [x] Python script variable matching fixed (uses `typeOfLevel` and `level` properties, matches "Temperature" and "Relative humidity")
+- [x] Testing passing - atmospheric profiles successfully extracted with complete vertical profiles
+- [x] Cache working correctly (6-hour TTL, 20-minute recent fetch bypass)
+- [x] Clarified data separation: SST comes from NSST (Phase 1), atmospheric profiles from GFS (no SST included)
 
 **Caching Strategy**:
 - File-based cache: `data/cache/atmospheric/atmospheric-YYYY-MM-DD-HH.json`
@@ -200,9 +216,9 @@ curl "http://localhost:3000/api/atmospheric-data?lat=25&lon=-80"
 - Update `lib/cache-manager.ts` to support atmospheric data caching
 
 **Success Criteria**: 
-- ✅ Server Action returns real atmospheric data with complete vertical profile
-- ✅ Proper caching implemented
-- ✅ Data format matches requirements for complete Emanuel's formula
+- Server Action returns real atmospheric data with complete vertical profile
+- Proper caching implemented
+- Data format matches requirements for complete Emanuel's formula
 
 ---
 
@@ -280,9 +296,9 @@ console.log(result1.gridPoints[0]);
 - Update `lib/cache-manager.ts` to support PI result caching
 
 **Success Criteria**: 
-- ✅ PI calculated once per dataset using complete Emanuel's formula
-- ✅ Cached results reused efficiently
-- ✅ Results include calculation metadata for validation
+- PI calculated once per dataset using complete Emanuel's formula
+- Cached results reused efficiently
+- Results include calculation metadata for validation
 
 ---
 
@@ -324,7 +340,8 @@ const pressureScale = d3.scaleSequential()
 - `components/d3-pressure-map.tsx`
 - `components/pressure-color-legend.tsx`
 
-**Success Criteria**: ✅ Pressure map displays correctly with proper colors
+**Success Criteria**: 
+- Pressure map displays correctly with proper colors
 
 ---
 
@@ -372,7 +389,8 @@ const windScale = d3.scaleThreshold<number, string>()
 - `components/d3-windspeed-map.tsx`
 - `components/windspeed-color-legend.tsx`
 
-**Success Criteria**: ✅ Wind speed map displays with correct category colors
+**Success Criteria**: 
+- Wind speed map displays with correct category colors
 
 ---
 
@@ -419,7 +437,8 @@ const windScale = d3.scaleThreshold<number, string>()
 **Files Modified**:
 - `app/page.tsx`
 
-**Success Criteria**: ✅ Dashboard displays all three maps in top/bottom layout
+**Success Criteria**: 
+- Dashboard displays all three maps in top/bottom layout
 
 ---
 
@@ -450,7 +469,8 @@ const windScale = d3.scaleThreshold<number, string>()
 - [ ] Tooltips: Work on all maps
 - [ ] Legends: Accurate and readable
 
-**Success Criteria**: ✅ Phase 2 works correctly with real atmospheric data and proper caching
+**Success Criteria**: 
+- Phase 2 works correctly with real atmospheric data and proper caching
 
 ---
 
@@ -484,10 +504,10 @@ const windScale = d3.scaleThreshold<number, string>()
   - Known limitations
 
 **Success Criteria**: 
-- ✅ Complete documentation for expert review
-- ✅ Validation results match published Emanuel's formula calculations
-- ✅ Code is reviewable and traceable
-- ✅ All assumptions and limitations documented
+- Complete documentation for expert review
+- Validation results match published Emanuel's formula calculations
+- Code is reviewable and traceable
+- All assumptions and limitations documented
 
 ---
 
@@ -531,7 +551,8 @@ const profile = await getAtmosphericData({ lat: 25, lon: -80 });
 - [ ] Atmospheric data integrates properly
 - [ ] All three maps use same data date
 
-**Success Criteria**: ✅ Phase 2 complete and production-ready
+**Success Criteria**: 
+- Phase 2 complete and production-ready
 
 ---
 
@@ -556,26 +577,26 @@ const profile = await getAtmosphericData({ lat: 25, lon: -80 });
 - None new (D3 already installed)
 
 **Data Sources**:
-- SST data: ✅ Already working (NSST from NOMADS GRIB2 - Phase 3 migration)
+- SST data: [x] Already working (NSST from NOMADS GRIB2 - Phase 3 migration)
 - Atmospheric data: GRIB2/NOMADS (preferred) or THREDDS/OPeNDAP (Task 2.2) with 6-hour caching
 
 **Type Definitions**:
 - `types/atmospheric.ts` - New
 - `types/pi.ts` - New
-- `types/sst.ts` - ✅ Already exists
-- `types/geographic.ts` - ✅ Already exists
+- `types/sst.ts` - [x] Already exists
+- `types/geographic.ts` - [x] Already exists
 
 ---
 
 ## Success Metrics
 
 **Phase 2 Complete When**:
-- ✅ PI calculations scientifically accurate
-- ✅ Three maps display pressure, wind, SST
-- ✅ Values are reasonable (match expected ranges)
-- ✅ Full grid processed in < 30 seconds (mock data)
-- ✅ UI is responsive and user-friendly
-- ✅ All tests pass
+- PI calculations scientifically accurate
+- Three maps display pressure, wind, SST
+- Values are reasonable (match expected ranges)
+- Full grid processed in < 30 seconds (mock data)
+- UI is responsive and user-friendly
+- All tests pass
 
 ---
 

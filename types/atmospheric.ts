@@ -11,18 +11,16 @@
  */
 
 /**
- * Complete vertical atmospheric profile
+ * Raw atmospheric profile from GFS (without SST)
  * 
- * Contains temperature, relative humidity, and pressure at all standard
- * atmospheric levels required for Emanuel's thermodynamic method.
+ * This is what GFS provides: air temperature, humidity, and pressure at various levels.
+ * SST is NOT included because it comes from NSST (Phase 1), not from GFS.
  * 
  * All temperatures in Celsius
  * All pressures in millibars (mb)
  * Relative humidity as percentage (0-100)
  */
-export interface AtmosphericProfile {
-  /** Sea surface temperature (Celsius) */
-  sst: number;
+export interface RawAtmosphericProfile {
   
   /** Surface level (typically ~1013 mb) */
   surface: {
@@ -96,6 +94,28 @@ export interface AtmosphericProfile {
     temperature: number;
     pressure: number;
   };
+}
+
+/**
+ * Complete atmospheric profile for PI calculation (with SST)
+ * 
+ * This is the complete profile needed for Emanuel's PI calculation.
+ * It combines RawAtmosphericProfile (from GFS) with SST (from NSST).
+ * 
+ * Created in Task 2.3 by combining NSST SST with GFS atmospheric data.
+ * 
+ * All temperatures in Celsius
+ * All pressures in millibars (mb)
+ * Relative humidity as percentage (0-100)
+ */
+export interface AtmosphericProfile extends RawAtmosphericProfile {
+  /** 
+   * Sea surface temperature (Celsius)
+   * 
+   * This comes from NSST data source (Phase 1), NOT from GFS.
+   * The complete profile is created by combining NSST SST with GFS atmospheric data.
+   */
+  sst: number;
 }
 
 /**
@@ -191,7 +211,8 @@ export interface PIResult {
 export interface AtmosphericGridPoint {
   lat: number;
   lon: number;
-  profile: AtmosphericProfile;
+  /** Raw atmospheric profile from GFS (without SST) */
+  profile: RawAtmosphericProfile;
 }
 
 /**
