@@ -24,6 +24,7 @@ export default function D3SSTMap({ width = 1200, height = 700 }: D3SSTMapProps) 
     y: number;
     content: string;
   }>({ show: false, x: 0, y: 0, content: '' });
+  const [mapBounds, setMapBounds] = useState<{ top: number; bottom: number; height: number } | null>(null);
 
   // Fetch SST data
   const fetchData = async () => {
@@ -135,6 +136,82 @@ export default function D3SSTMap({ width = 1200, height = 700 }: D3SSTMapProps) 
       .attr('stroke', '#ddd')
       .attr('stroke-width', 0.5)
       .attr('opacity', 0.5);
+    
+    // Add black border around the map (using the clipping bounds)
+    // Draw border first so labels can be positioned outside it
+    const borderGroup = svg.append('g').attr('class', 'map-border');
+    borderGroup.append('rect')
+      .attr('x', clipX)
+      .attr('y', clipY)
+      .attr('width', clipWidth)
+      .attr('height', clipHeight)
+      .attr('fill', 'none')
+      .attr('stroke', '#000000')
+      .attr('stroke-width', 2);
+    
+    // Store the map bounds for legend alignment
+    setMapBounds({
+      top: clipY,
+      bottom: clipY + clipHeight,
+      height: clipHeight
+    });
+    
+    // Add graticule labels (outside the map border)
+    // Create a separate group for labels that won't be clipped
+    const labelGroup = svg.append('g').attr('class', 'graticule-labels');
+    
+    // Generate latitude labels (on left side only, outside border)
+    // Right side labels removed - legend will be placed there
+    const latLines = d3.range(Math.ceil(clipBounds.minLat / 5) * 5, clipBounds.maxLat + 5, 5);
+    latLines.forEach(lat => {
+      const [x, y] = projection([clipBounds.minLon, lat]) || [0, 0];
+      
+      // Left side label (outside border)
+      if (x >= 0 && y >= 0 && y <= height) {
+        labelGroup.append('text')
+          .attr('x', clipX - 8)
+          .attr('y', y)
+          .attr('text-anchor', 'end')
+          .attr('alignment-baseline', 'middle')
+          .style('font-size', '10px')
+          .style('fill', '#000000')
+          .style('font-weight', '500')
+          .text(`${lat > 0 ? lat + '°N' : lat === 0 ? '0°' : Math.abs(lat) + '°S'}`);
+      }
+    });
+    
+    // Generate longitude labels (on top and bottom, outside border)
+    const lonLines = d3.range(Math.ceil(clipBounds.minLon / 5) * 5, clipBounds.maxLon + 5, 5);
+    lonLines.forEach(lon => {
+      const [x, y] = projection([lon, clipBounds.minLat]) || [0, 0];
+      const [xTop, yTop] = projection([lon, clipBounds.maxLat]) || [0, 0];
+      
+      // Bottom label (outside border)
+      if (x >= 0 && x <= width && y >= 0) {
+        labelGroup.append('text')
+          .attr('x', x)
+          .attr('y', clipY + clipHeight + 18)
+          .attr('text-anchor', 'middle')
+          .attr('alignment-baseline', 'hanging')
+          .style('font-size', '10px')
+          .style('fill', '#000000')
+          .style('font-weight', '500')
+          .text(`${lon < 0 ? Math.abs(lon) + '°W' : lon === 0 ? '0°' : lon + '°E'}`);
+      }
+      
+      // Top label (outside border)
+      if (xTop >= 0 && xTop <= width && yTop >= 0) {
+        labelGroup.append('text')
+          .attr('x', xTop)
+          .attr('y', clipY - 8)
+          .attr('text-anchor', 'middle')
+          .attr('alignment-baseline', 'baseline')
+          .style('font-size', '10px')
+          .style('fill', '#000000')
+          .style('font-weight', '500')
+          .text(`${lon < 0 ? Math.abs(lon) + '°W' : lon === 0 ? '0°' : lon + '°E'}`);
+      }
+    });
 
     console.log(`[Map] Rendering ${data.gridPoints.length} points as filled grid cells...`);
     
@@ -301,19 +378,24 @@ export default function D3SSTMap({ width = 1200, height = 700 }: D3SSTMapProps) 
     <div className="relative">
       {/* Map and Legend Container */}
       <div className="flex gap-4 items-start bg-white rounded-lg border border-gray-300 p-4 shadow-lg">
-        <svg
-          ref={svgRef}
-          width={width}
-          height={height}
-          className="rounded bg-gray-50"
-        />
-        
-        {/* Vertical Legend on Right */}
-        {data && (
-          <div className="flex-shrink-0">
-            <SSTColorLegend width={80} height={height} />
-          </div>
-        )}
+        <div className="relative flex gap-0 items-stretch">
+          <svg
+            ref={svgRef}
+            width={width}
+            height={height}
+            className="bg-white"
+            style={{ display: 'block' }}
+          />
+          
+          {/* Vertical Legend on Right - flush against map border, perfectly aligned */}
+          {data && mapBounds && (
+            <div className="flex-shrink-0" style={{ height: `${height}px`, position: 'relative', overflow: 'visible' }}>
+              <div style={{ position: 'absolute', top: `${mapBounds.top}px`, height: `${mapBounds.height}px`, overflow: 'visible' }}>
+                <SSTColorLegend width={80} height={mapBounds.height} />
+              </div>
+            </div>
+          )}
+        </div>
       </div>
       
       {/* Tooltip */}

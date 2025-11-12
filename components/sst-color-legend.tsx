@@ -46,14 +46,14 @@ export default function SSTColorLegend({ width = 80, height = 400 }: SSTColorLeg
       .attr('offset', d => `${((d - 10) / 22) * 100}%`)
       .attr('stop-color', d => colorScale(d));
 
-    // Draw gradient rectangle
-    const margin = { top: 40, right: 10, bottom: 40, left: 10 };
+    // Draw gradient rectangle - no margins, full height
+    const margin = { top: 0, right: 20, bottom: 0, left: 10 }; // More right margin for labels
     const gradientWidth = 30;
-    const gradientHeight = height - margin.top - margin.bottom;
+    const gradientHeight = height; // Full height, no margins
 
     svg.append('rect')
       .attr('x', margin.left)
-      .attr('y', margin.top)
+      .attr('y', 0)
       .attr('width', gradientWidth)
       .attr('height', gradientHeight)
       .style('fill', 'url(#sst-gradient-vertical)')
@@ -63,32 +63,32 @@ export default function SSTColorLegend({ width = 80, height = 400 }: SSTColorLeg
     // Add vertical axis
     const yScale = d3.scaleLinear()
       .domain([10, 32])
-      .range([margin.top + gradientHeight, margin.top]);
+      .range([height, 0]); // Full height range
 
     const yAxis = d3.axisRight(yScale)
       .ticks(11)
       .tickFormat(d => `${d}°C`);
 
-    svg.append('g')
+    const axisGroup = svg.append('g')
       .attr('transform', `translate(${margin.left + gradientWidth}, 0)`)
       .call(yAxis)
       .style('font-size', '11px')
-      .style('font-weight', '500');
-
-    // Add title at top
-    svg.append('text')
-      .attr('x', width / 2)
-      .attr('y', 20)
-      .attr('text-anchor', 'middle')
-      .style('font-size', '12px')
-      .style('font-weight', '600')
-      .text('SST (°C)');
+      .style('font-weight', '500')
+      .style('fill', '#000000'); // Black text for better contrast
+    
+    // Remove the axis line (the thick black border on the right)
+    axisGroup.select('.domain').remove();
+    
+    // Ensure tick labels are black and not clipped
+    axisGroup.selectAll('text')
+      .style('fill', '#000000')
+      .style('overflow', 'visible');
 
   }, [width, height]);
 
   return (
-    <div className="flex flex-col items-center bg-white/90 backdrop-blur rounded-lg border border-gray-300 p-2 shadow-sm">
-      <svg ref={svgRef} width={width} height={height} />
+    <div className="flex flex-col items-stretch" style={{ height: `${height}px`, overflow: 'visible' }}>
+      <svg ref={svgRef} width={width} height={height} className="bg-white" style={{ display: 'block', overflow: 'visible' }} />
     </div>
   );
 }
