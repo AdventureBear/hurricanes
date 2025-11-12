@@ -8,7 +8,7 @@ import type { SSTDataResponse, SSTGridPoint } from '@/types/sst';
  * Resolution: 0.25° x 0.25° (~45,000 grid points)
  */
 async function fetchSSTDataFromNOAA(): Promise<SSTDataResponse> {
-  console.log('[SST API] Fetching fresh data from NOAA...');
+  console.log('[SST API] Fetching fresh data from NOAA (this should only happen when cache is invalid or expired)...');
   const startTime = Date.now();
   
   const now = new Date();

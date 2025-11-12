@@ -38,9 +38,11 @@ function getCacheFilePath(date: Date = new Date()): string {
 /**
  * Gets the latest available data date from NOAA (without fetching full data)
  * Returns the date string (YYYY-MM-DD) or null if unable to determine
+ * NOTE: This only fetches metadata (time dimension), NOT the full SST dataset
  */
 async function getLatestAvailableDataDate(): Promise<string | null> {
   try {
+    console.log('[Cache] Checking NOAA metadata for latest available date (lightweight check, not fetching full data)...');
     const now = new Date();
     const currentYear = now.getFullYear();
     const previousYear = currentYear - 1;
@@ -73,7 +75,7 @@ async function getLatestAvailableDataDate(): Promise<string | null> {
     // Use latest available date (accounting for 2-day lag)
     const timeIndex = Math.max(0, maxTimeIndex - 2);
     
-    // Fetch the actual time value
+    // Fetch the actual time value (still just metadata, not full data)
     const timeValueUrl = `https://psl.noaa.gov/thredds/dodsC/Datasets/noaa.oisst.v2.highres/sst.day.mean.${dataYear}.nc.ascii?time[${timeIndex}:1:${timeIndex}]`;
     const timeValueResponse = await fetch(timeValueUrl);
     const timeValueText = await timeValueResponse.text();
@@ -86,7 +88,9 @@ async function getLatestAvailableDataDate(): Promise<string | null> {
       const baseDate = new Date(Date.UTC(1800, 0, 1, 0, 0, 0, 0));
       const millisecondsSince1800 = daysSince1800 * 24 * 60 * 60 * 1000;
       const dataDate = new Date(baseDate.getTime() + millisecondsSince1800);
-      return dataDate.toISOString().split('T')[0];
+      const dateString = dataDate.toISOString().split('T')[0];
+      console.log(`[Cache] Latest available date from NOAA: ${dateString} (metadata check only, no full data fetch)`);
+      return dateString;
     }
     
     return null;
@@ -133,7 +137,9 @@ export async function isCacheValid(date: Date = new Date()): Promise<boolean> {
     
     const cachedDate = latestCache.data.date;
     const now = Date.now();
-    const lastChecked = latestCache.lastChecked || latestCache.timestamp || 0;
+    // Use lastChecked if it exists, otherwise use timestamp (for old cache files)
+    // If neither exists, set it to now to avoid always checking
+    const lastChecked = latestCache.lastChecked ?? latestCache.timestamp ?? now;
     const timeSinceLastCheck = now - lastChecked;
     
     console.log(`[Cache] Found cached data from: ${cachedDate}`);
@@ -141,7 +147,15 @@ export async function isCacheValid(date: Date = new Date()): Promise<boolean> {
     
     // If we checked recently (within CHECK_INTERVAL_MS), don't check again
     if (timeSinceLastCheck < CHECK_INTERVAL_MS) {
-      console.log(`[Cache] Using cache - checked recently, skipping NOAA check`);
+      console.log(`[Cache] Using cache - checked ${Math.round(timeSinceLastCheck / (60 * 60 * 1000))} hours ago, skipping NOAA check`);
+      
+      // Update lastChecked if it wasn't set (for old cache files)
+      if (!latestCache.lastChecked) {
+        latestCache.lastChecked = now;
+        const cachePath = path.join(CACHE_DIR, latestCache.filename);
+        await fs.writeFile(cachePath, JSON.stringify(latestCache, null, 2), 'utf-8');
+      }
+      
       return true;
     }
     
