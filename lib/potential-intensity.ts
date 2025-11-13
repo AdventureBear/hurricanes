@@ -355,6 +355,7 @@ export function calculatePI(profile: AtmosphericProfile): PIResult {
     T_s;
   
   // Build intermediate values for debugging/validation
+  // These are included in the result for comprehensive error analysis
   const intermediate = {
     T_s_K: T_s,
     T_o_K: T_o,
@@ -455,6 +456,19 @@ export function calculatePI(profile: AtmosphericProfile): PIResult {
   const v_max_ms = Math.sqrt(v_max_squared);
   const v_max_knots = msToKnots(v_max_ms);
   
+  // Diagnostic logging for implausible values (>200kt is unrealistic)
+  if (v_max_knots > 200) {
+    console.warn(`[PI Calculation] ⚠️ Implausible vmax: ${v_max_knots.toFixed(1)} kt (${v_max_ms.toFixed(1)} m/s)`);
+    console.warn(`[PI Calculation]   SST: ${profile.sst.toFixed(1)}°C, T_s: ${T_s.toFixed(1)}K, T_o: ${T_o.toFixed(1)}K`);
+    console.warn(`[PI Calculation]   theta_e_s: ${theta_e_s.toFixed(1)}K, theta_e_env: ${theta_e_env.toFixed(1)}K`);
+    console.warn(`[PI Calculation]   delta_theta_e: ${delta_theta_e.toFixed(1)}K, eta: ${eta.toFixed(3)}`);
+    console.warn(`[PI Calculation]   v_max^2: ${v_max_squared.toFixed(1)} (m/s)^2`);
+    console.warn(`[PI Calculation]   Surface: T=${profile.surface.temperature.toFixed(1)}°C, RH=${profile.surface.relativeHumidity?.toFixed(1) || 'N/A'}%, P=${p_s.toFixed(1)}mb`);
+    console.warn(`[PI Calculation]   500mb: T=${profile.level_500.temperature.toFixed(1)}°C, RH=${profile.level_500.relativeHumidity?.toFixed(1) || 'N/A'}%, P=${profile.level_500.pressure.toFixed(1)}mb`);
+    console.warn(`[PI Calculation]   200mb: T=${profile.level_200.temperature.toFixed(1)}°C, P=${profile.level_200.pressure.toFixed(1)}mb`);
+    console.warn(`[PI Calculation]   Equation terms: C_K/C_D=${CONSTANTS.C_K_OVER_C_D}, T_s/T_o=${(T_s/T_o).toFixed(3)}, delta_theta_e/theta_e_env=${(delta_theta_e/theta_e_env).toFixed(3)}, C_PD=${CONSTANTS.C_PD}, T_s=${T_s.toFixed(1)}`);
+  }
+  
   // Step 4: Calculate minimum central pressure
   // Reference: Emanuel 1988, Eq. 17
   // 
@@ -467,6 +481,8 @@ export function calculatePI(profile: AtmosphericProfile): PIResult {
   const p_min_mb = p_s * Math.exp(
     -(v_max_ms * v_max_ms) / (2 * CONSTANTS.R_D * T_s)
   );
+  
+  // No clamping - we need to see the actual calculated values to fix the root cause
   
   // Step 5: Categorize
   const category = categorizeHurricane(v_max_knots);

@@ -231,6 +231,30 @@ export async function calculatePIData(bounds?: GeographicBounds): Promise<PIData
     let errorCount = 0;
     const totalPoints = sstData.gridPoints.length;
     
+    // Collect ALL calculated values for comprehensive analysis
+    // ALL points are suspect - we need to validate physical realism
+    interface CalculatedValue {
+      lat: number;
+      lon: number;
+      sst: number;
+      vmax: number;
+      pmin: number;
+      category: string;
+      surfaceTemp: number;
+      surfaceRH: number | undefined;
+      surfacePressure: number;
+      level500Temp: number;
+      level500RH: number | undefined;
+      level200Temp: number;
+      theta_e_s: number;
+      theta_e_env: number;
+      delta_theta_e: number;
+      v_max_squared: number;
+      issues: string[]; // List of validation issues
+    }
+    const allCalculatedValues: CalculatedValue[] = [];
+    const physicallyImpossible: CalculatedValue[] = [];
+    
     // Filter SST points to bounds if provided
     const sstPointsInBounds = bounds
       ? sstData.gridPoints.filter(
@@ -273,6 +297,62 @@ export async function calculatePIData(bounds?: GeographicBounds): Promise<PIData
         
         const piResult = calculatePI(completeProfile);
         
+        // Collect ALL calculated values and validate physical realism
+        const issues: string[] = [];
+        
+        // Physical validation rules:
+        // 1. Hurricanes require SST >= 26.5°C to form and sustain
+        // 2. Cat 5 (>=137kt) requires very warm water (>=28°C typically)
+        // 3. Cat 4 (>=113kt) requires warm water (>=27°C typically)
+        // 4. Cat 3 (>=96kt) requires SST >= 26.5°C
+        // 5. Realistic vmax for hurricanes: 34-195kt (record is ~195kt)
+        // 6. Realistic pmin: 870-1013mb (lowest recorded ~870mb)
+        
+        if (piResult.vmax > 195) {
+          issues.push(`vmax ${piResult.vmax.toFixed(1)}kt exceeds historical record (~195kt)`);
+        }
+        if (piResult.pmin < 870) {
+          issues.push(`pmin ${piResult.pmin.toFixed(1)}mb below historical record (~870mb)`);
+        }
+        if (piResult.category === 'Cat5' && sstPoint.sst < 28) {
+          issues.push(`Cat5 with SST ${sstPoint.sst.toFixed(1)}°C (requires >=28°C)`);
+        }
+        if (piResult.category === 'Cat4' && sstPoint.sst < 27) {
+          issues.push(`Cat4 with SST ${sstPoint.sst.toFixed(1)}°C (requires >=27°C)`);
+        }
+        if ((piResult.category === 'Cat3' || piResult.category === 'Cat2' || piResult.category === 'Cat1') && sstPoint.sst < 26.5) {
+          issues.push(`${piResult.category} with SST ${sstPoint.sst.toFixed(1)}°C (requires >=26.5°C)`);
+        }
+        if (piResult.vmax >= 64 && sstPoint.sst < 26.5) {
+          // Tropical storm or higher requires warm water
+          issues.push(`Tropical storm/hurricane (${piResult.vmax.toFixed(1)}kt) with SST ${sstPoint.sst.toFixed(1)}°C (requires >=26.5°C)`);
+        }
+        
+        const calculated: CalculatedValue = {
+          lat: sstPoint.lat,
+          lon: sstPoint.lon,
+          sst: sstPoint.sst,
+          vmax: piResult.vmax,
+          pmin: piResult.pmin,
+          category: piResult.category,
+          surfaceTemp: completeProfile.surface.temperature,
+          surfaceRH: completeProfile.surface.relativeHumidity,
+          surfacePressure: completeProfile.surface.pressure,
+          level500Temp: completeProfile.level_500.temperature,
+          level500RH: completeProfile.level_500.relativeHumidity,
+          level200Temp: completeProfile.level_200.temperature,
+          theta_e_s: piResult.intermediate?.theta_e_s_K || 0,
+          theta_e_env: piResult.intermediate?.theta_e_env_K || 0,
+          delta_theta_e: piResult.intermediate?.delta_theta_e_K || 0,
+          v_max_squared: piResult.intermediate?.v_max_squared || 0,
+          issues,
+        };
+        
+        allCalculatedValues.push(calculated);
+        if (issues.length > 0) {
+          physicallyImpossible.push(calculated);
+        }
+        
         // Create PI grid point
         const piPoint: PIGridPoint = {
           lat: sstPoint.lat,
@@ -290,6 +370,59 @@ export async function calculatePIData(bounds?: GeographicBounds): Promise<PIData
         errorCount++;
       }
     }
+    
+    // Comprehensive analysis of ALL calculated values
+    console.error(`[PI Action] ⚠️⚠️⚠️ COMPREHENSIVE CALCULATION ANALYSIS ⚠️⚠️⚠️`);
+    console.error(`[PI Action] Total points calculated: ${allCalculatedValues.length}`);
+    console.error(`[PI Action] Points with physical impossibilities: ${physicallyImpossible.length} (${((physicallyImpossible.length / allCalculatedValues.length) * 100).toFixed(1)}%)`);
+    
+    // Overall statistics
+    if (allCalculatedValues.length > 0) {
+      const vmaxValues = allCalculatedValues.map(v => v.vmax);
+      const pminValues = allCalculatedValues.map(v => v.pmin);
+      const sstValues = allCalculatedValues.map(v => v.sst);
+      const categories = allCalculatedValues.map(v => v.category);
+      
+      console.error(`[PI Action] ========== OVERALL STATISTICS ==========`);
+      console.error(`[PI Action] Vmax: min=${Math.min(...vmaxValues).toFixed(1)}kt, max=${Math.max(...vmaxValues).toFixed(1)}kt, avg=${(vmaxValues.reduce((a,b) => a+b, 0) / vmaxValues.length).toFixed(1)}kt`);
+      console.error(`[PI Action] Pmin: min=${Math.min(...pminValues).toFixed(1)}mb, max=${Math.max(...pminValues).toFixed(1)}mb, avg=${(pminValues.reduce((a,b) => a+b, 0) / pminValues.length).toFixed(1)}mb`);
+      console.error(`[PI Action] SST: min=${Math.min(...sstValues).toFixed(1)}°C, max=${Math.max(...sstValues).toFixed(1)}°C, avg=${(sstValues.reduce((a,b) => a+b, 0) / sstValues.length).toFixed(1)}°C`);
+      console.error(`[PI Action] Categories: Cat5=${categories.filter(c => c === 'Cat5').length}, Cat4=${categories.filter(c => c === 'Cat4').length}, Cat3=${categories.filter(c => c === 'Cat3').length}, Cat2=${categories.filter(c => c === 'Cat2').length}, Cat1=${categories.filter(c => c === 'Cat1').length}, TS=${categories.filter(c => c === 'TS').length}, TD=${categories.filter(c => c === 'TD').length}`);
+    }
+    
+    // Group by issue type
+    const issuesByType: Record<string, CalculatedValue[]> = {};
+    physicallyImpossible.forEach(v => {
+      v.issues.forEach(issue => {
+        if (!issuesByType[issue]) {
+          issuesByType[issue] = [];
+        }
+        issuesByType[issue].push(v);
+      });
+    });
+    
+    console.error(`[PI Action] ========== ISSUES BY TYPE ==========`);
+    Object.entries(issuesByType).forEach(([issue, values]) => {
+      console.error(`[PI Action] "${issue}": ${values.length} occurrences`);
+    });
+    
+    // Show ALL physically impossible values
+    if (physicallyImpossible.length > 0) {
+      console.error(`[PI Action] ========== ALL PHYSICALLY IMPOSSIBLE VALUES ==========`);
+      physicallyImpossible.forEach((v, idx) => {
+        console.error(`[PI Action] ${idx + 1}. ${v.lat.toFixed(2)}°N, ${v.lon.toFixed(2)}°W: ${v.category} (${v.vmax.toFixed(1)}kt, ${v.pmin.toFixed(1)}mb) with SST ${v.sst.toFixed(1)}°C`);
+        v.issues.forEach(issue => {
+          console.error(`[PI Action]    ⚠️ ${issue}`);
+        });
+        console.error(`[PI Action]    Surface: T=${v.surfaceTemp.toFixed(1)}°C, RH=${v.surfaceRH?.toFixed(1) || 'N/A'}%, P=${v.surfacePressure.toFixed(1)}mb`);
+        console.error(`[PI Action]    500mb: T=${v.level500Temp.toFixed(1)}°C, RH=${v.level500RH?.toFixed(1) || 'N/A'}%`);
+        console.error(`[PI Action]    200mb: T=${v.level200Temp.toFixed(1)}°C`);
+        console.error(`[PI Action]    theta_e_s=${v.theta_e_s.toFixed(1)}K, theta_e_env=${v.theta_e_env.toFixed(1)}K, delta=${v.delta_theta_e.toFixed(1)}K`);
+        console.error(`[PI Action]    v_max^2=${v.v_max_squared.toFixed(1)} (m/s)^2`);
+      });
+    }
+    
+    console.error(`[PI Action] ⚠️⚠️⚠️ END COMPREHENSIVE ANALYSIS ⚠️⚠️⚠️`);
     
     const calculationTime = Date.now() - startTime;
     const avgTime = calculationTime / totalPoints;

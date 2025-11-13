@@ -10,6 +10,7 @@ import type { Basin, GeographicBounds } from '../types/geographic';
 import { createOceanographicScale } from './sst-color-legend';
 import basinsDataRaw from '../rules/basins.json';
 import { getSSTData } from '../app/actions/sst-data';
+import { renderD3MapBase } from './d3-map-base';
 
 /**
  * DEFAULT PROJECTION: Mercator (geoMercator)
@@ -203,48 +204,15 @@ export default function D3SSTMap({ width: propWidth, height: propHeight, onDataD
     });
     
     console.log(`[Map] Filtered to ${filteredPoints.length} points within ${selectedBasin.basin} bounds`);
+    console.log(`[Map] Land filtering will be handled by SVG masking (no point-by-point checks needed)`);
     
-    // Additional filtering: Use TopoJSON land data to filter out points over land
-    // This is done asynchronously after coastlines load
-    fetch('/data/countries-110m.json')
-      .then(res => res.json())
-      .then((world) => {
-        // Extract land features
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const land = topojson.feature(world as any, (world as any).objects.countries);
-        const features = (land as unknown as GeoJSON.FeatureCollection).features;
-        
-        // Filter out points that are over land using d3.geoContains
-        const oceanOnlyPoints = filteredPoints.filter(p => {
-          const point: GeoJSON.Position = [p.lon, p.lat];
-          // Check if point is contained in any land polygon
-          for (const feature of features) {
-            if (d3.geoContains(feature, point)) {
-              return false; // Point is over land
-            }
-          }
-          return true; // Point is over ocean
-        });
-        
-        console.log(`[Map] Filtered out ${filteredPoints.length - oceanOnlyPoints.length} land points`);
-        
-        setFilteredData({
-          ...data,
-          gridPoints: oceanOnlyPoints,
-          pointCount: oceanOnlyPoints.length,
-          bounds: clipBounds
-        });
-      })
-      .catch(err => {
-        console.warn('[Map] Could not load land data for filtering, using all points:', err);
-        // Fallback: use points without land filtering
-        setFilteredData({
-          ...data,
-          gridPoints: filteredPoints,
-          pointCount: filteredPoints.length,
-          bounds: clipBounds
-        });
-      });
+    // Land filtering is now done via SVG masking in the base renderer (much faster than point-by-point)
+    setFilteredData({
+      ...data,
+      gridPoints: filteredPoints, // Include all points - mask will hide land ones
+      pointCount: filteredPoints.length,
+      bounds: clipBounds
+    });
   }, [data, selectedBasin]);
 
 
@@ -262,6 +230,32 @@ export default function D3SSTMap({ width: propWidth, height: propHeight, onDataD
       return;
     }
     
+    // For gridded mode, use the base renderer (it handles all setup)
+    if (visualizationMode === 'gridded') {
+      renderD3MapBase({
+        svgRef,
+        filteredData,
+        selectedBasin,
+        width,
+        height,
+        config: {
+          colorScale: createOceanographicScale,
+          legendDomain: [-2, 35] as [number, number],
+          legendFormat: (value: number) => `${value}°C`,
+          legendTitle: 'Temperature (°C)',
+          getValue: (point) => point.sst,
+          formatTooltip: (point) => `Lat: ${point.lat.toFixed(2)}°, Lon: ${point.lon.toFixed(2)}°\nSST: ${point.sst.toFixed(1)}°C`,
+          isValidValue: (value) => value >= -2 && value <= 35 && !isNaN(value)
+        },
+        projectionRef,
+        pathGeneratorRef,
+        isRenderingRef,
+        setTooltip
+      });
+      return; // Exit early - base renderer handles everything
+    }
+    
+    // Contour mode - keep original implementation
     // Prevent concurrent renders
     if (isRenderingRef.current) {
       console.log('[Map] Render already in progress, skipping...');
@@ -503,279 +497,230 @@ export default function D3SSTMap({ width: propWidth, height: propHeight, onDataD
     // Use filtered data (already filtered to basin bounds)
     const validPoints = filteredData.gridPoints;
     
-    if (visualizationMode === 'gridded') {
-      // Render each grid cell as a rectangle
-      // Data resolution: 0.5° x 0.5° (from rtgssthr_grb_0.5.grib2)
-      // Each data point is the CENTER of a 0.5° x 0.5° grid cell
-      // Cell boundaries are ±0.25° from center
-      const halfCell = 0.25; // half of 0.5°
-      
-      // Render grid cells - use exact same projection as coastlines
-      const gridGroup = g.append('g').attr('class', 'sst-grid');
-      
-      validPoints.forEach(d => {
-        // Calculate cell boundaries in geographic coordinates
-        // Add small overlap (0.01°) to eliminate gaps between pixels
-        const overlap = 0.01;
-        const lonMin = d.lon - halfCell - overlap;
-        const lonMax = d.lon + halfCell + overlap;
-        const latMin = d.lat - halfCell - overlap;
-        const latMax = d.lat + halfCell + overlap;
-        
-        // Project all four corners to ensure accurate cell boundaries
-        const corners = [
-          projection([lonMin, latMin]), // bottom-left
-          projection([lonMax, latMin]), // bottom-right
-          projection([lonMax, latMax]), // top-right
-          projection([lonMin, latMax])  // top-left
-        ];
-        
-        // Only render if all corners are valid
-        if (corners.every(c => c !== null)) {
-          const xs = corners.map(c => c![0]);
-          const ys = corners.map(c => c![1]);
-          const x = Math.min(...xs);
-          const y = Math.min(...ys);
-          const cellWidth = Math.max(...xs) - x;
-          const cellHeight = Math.max(...ys) - y;
-          
-          gridGroup.append('rect')
-            .attr('x', x)
-            .attr('y', y)
-            .attr('width', cellWidth)
-            .attr('height', cellHeight)
-            .attr('fill', colorScale(d.sst))
-            .attr('opacity', 0.95)
-            .attr('stroke', 'none');
-        }
-      });
-    } else {
-      // Contour mode
-      // Build a 2D grid for contour generation
-      // Create sorted arrays of unique lat/lon values
-      const uniqueLats = Array.from(new Set(validPoints.map(p => p.lat))).sort((a, b) => a - b);
-      const uniqueLons = Array.from(new Set(validPoints.map(p => p.lon))).sort((a, b) => a - b);
-      
-      // Create a Map for fast lookup: "lat,lon" -> sst
-      const sstMap = new Map<string, number>();
-      validPoints.forEach(p => {
-        sstMap.set(`${p.lat},${p.lon}`, p.sst);
-      });
-      
-      // Build flat array for d3-contour
-      // d3-contour expects: values[i + j*n] where i is column (lon), j is row (lat)
-      // n = gridWidth, so values[i + j*gridWidth] = value at position (i, j)
-      const gridWidth = uniqueLons.length;
-      const gridHeight = uniqueLats.length;
-      const values: number[] = new Array(gridWidth * gridHeight);
-      
-      let minSST = Infinity;
-      let maxSST = -Infinity;
-      
-      // Fill flat array: values[i + j*gridWidth] = SST at (lon[i], lat[j])
-      for (let j = 0; j < gridHeight; j++) {
-        for (let i = 0; i < gridWidth; i++) {
-          const sst = sstMap.get(`${uniqueLats[j]},${uniqueLons[i]}`);
-          const index = i + j * gridWidth;
-          if (sst !== undefined && !isNaN(sst)) {
-            values[index] = sst;
-            minSST = Math.min(minSST, sst);
-            maxSST = Math.max(maxSST, sst);
-          } else {
-            values[index] = NaN;
-          }
+    // Contour mode - Build a 2D grid for contour generation
+    // Create sorted arrays of unique lat/lon values
+    const uniqueLats = Array.from(new Set(validPoints.map(p => p.lat))).sort((a, b) => a - b);
+    const uniqueLons = Array.from(new Set(validPoints.map(p => p.lon))).sort((a, b) => a - b);
+    
+    // Create a Map for fast lookup: "lat,lon" -> sst
+    const sstMap = new Map<string, number>();
+    validPoints.forEach(p => {
+      sstMap.set(`${p.lat},${p.lon}`, p.sst);
+    });
+    
+    // Build flat array for d3-contour
+    // d3-contour expects: values[i + j*n] where i is column (lon), j is row (lat)
+    // n = gridWidth, so values[i + j*gridWidth] = value at position (i, j)
+    const gridWidth = uniqueLons.length;
+    const gridHeight = uniqueLats.length;
+    const values: number[] = new Array(gridWidth * gridHeight);
+    
+    let minSST = Infinity;
+    let maxSST = -Infinity;
+    
+    // Fill flat array: values[i + j*gridWidth] = SST at (lon[i], lat[j])
+    for (let j = 0; j < gridHeight; j++) {
+      for (let i = 0; i < gridWidth; i++) {
+        const sst = sstMap.get(`${uniqueLats[j]},${uniqueLons[i]}`);
+        const index = i + j * gridWidth;
+        if (sst !== undefined && !isNaN(sst)) {
+          values[index] = sst;
+          minSST = Math.min(minSST, sst);
+          maxSST = Math.max(maxSST, sst);
+        } else {
+          values[index] = NaN;
         }
       }
-      
-      console.log(`[Map] Grid size: ${gridWidth}x${gridHeight}, SST range: ${minSST.toFixed(1)}°C to ${maxSST.toFixed(1)}°C`);
-      console.log(`[Map] Flat array length: ${values.length}, expected: ${gridWidth * gridHeight}`);
-      
-      // Create contour generator
-      // Generate contours every 0.5°C from -2°C to 35°C (extended for cold water)
-      const contourThresholds = d3.range(-2, 35.5, 0.5);
-      const contourGenerator = contours()
-        .size([gridWidth, gridHeight])
-        .thresholds(contourThresholds);
-      
-      // Generate contours - pass flat array directly
-      // d3-contour expects: values[i + j*n] where (i, j) is position (column, row)
-      const contourData = contourGenerator(values) as Array<{
-        type: string;
-        value: number;
-        coordinates: number[][][] | number[][][][];
-      }>;
-      
-      console.log(`[Map] Generated ${contourData.length} contours`);
-      
-      if (contourData.length > 0) {
-        const firstContour = contourData[0];
-        console.log(`[Map] First contour sample:`, {
-          value: firstContour.value,
-          type: firstContour.type,
-          hasCoordinates: 'coordinates' in firstContour,
-          coordinatesType: Array.isArray(firstContour.coordinates) ? 'array' : typeof firstContour.coordinates,
-          coordinatesLength: Array.isArray(firstContour.coordinates) ? firstContour.coordinates.length : 'N/A',
-          firstCoordSample: Array.isArray(firstContour.coordinates) && firstContour.coordinates.length > 0 
-            ? firstContour.coordinates[0] 
-            : 'N/A',
-          fullStructure: JSON.stringify(firstContour, null, 2).substring(0, 500)
-        });
-      }
-      
-      // Create scale functions to convert grid indices to geographic coordinates
-      const lonScale = d3.scaleLinear()
-        .domain([0, gridWidth - 1])
-        .range([uniqueLons[0], uniqueLons[gridWidth - 1]]);
-      
-      const latScale = d3.scaleLinear()
-        .domain([0, gridHeight - 1])
-        .range([uniqueLats[0], uniqueLats[gridHeight - 1]]);
-      
-      console.log(`[Map] Coordinate scales: lon [${uniqueLons[0]}, ${uniqueLons[gridWidth - 1]}], lat [${uniqueLats[0]}, ${uniqueLats[gridHeight - 1]}]`);
-      
-      // Render contours as filled polygons
-      const contourGroup = g.append('g').attr('class', 'sst-contours');
-      
-      let renderedCount = 0;
-      let skippedCount = 0;
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      contourData.forEach((contour: any) => {
-        // d3-contour returns GeoJSON-like structures
-        // The coordinates property should be an array of rings (for Polygon) or polygons (for MultiPolygon)
-        const coords = contour.coordinates;
-        
-        // Check if coordinates exist and have data
-        if (!coords) {
-          skippedCount++;
-          return;
-        }
-        
-        // For Polygon: coordinates is array of rings, each ring is array of [x,y] pairs
-        // For MultiPolygon: coordinates is array of polygons, each polygon is array of rings
-        const hasData = Array.isArray(coords) && coords.length > 0;
-        if (!hasData) {
-          skippedCount++;
-          return;
-        }
-        
-        // Transform contour coordinates from grid space to geographic space
-        const transformCoordinates = (coords: number[][]): number[][] => {
-          return coords.map(([x, y]) => {
-            const lon = lonScale(x);
-            const lat = latScale(y);
-            return [lon, lat];
-          });
-        };
-        
-        let geoContour: GeoJSON.Polygon | GeoJSON.MultiPolygon;
-        
-        // Check contour type - d3-contour returns "Polygon" or "MultiPolygon"
-        const isMultiPolygon = contour.type === 'MultiPolygon';
-        
-        try {
-          if (isMultiPolygon) {
-            // MultiPolygon: coordinates is an array of polygons, each polygon is an array of rings
-            const polygons = coords as number[][][][];
-            if (polygons.length === 0 || polygons[0].length === 0) {
-              skippedCount++;
-              return;
-            }
-            geoContour = {
-              type: 'MultiPolygon',
-              coordinates: polygons.map(polygon =>
-                polygon.map(ring => transformCoordinates(ring as number[][]))
-              )
-            };
-          } else {
-            // Polygon: coordinates is an array of rings, each ring is an array of [x,y] pairs
-            const rings = coords as number[][][];
-            if (rings.length === 0 || rings[0].length === 0) {
-              skippedCount++;
-              return;
-            }
-            geoContour = {
-              type: 'Polygon',
-              coordinates: rings.map(ring => 
-                transformCoordinates(ring as number[][])
-              )
-            };
-          }
-          
-          // Get the contour value
-          const contourValue = contour.value;
-          
-          // Render the contour as a path with optional stroke
-          const path = contourGroup.append('path')
-            .datum(geoContour)
-            .attr('d', pathGenerator)
-            .attr('fill', colorScale(contourValue))
-            .attr('opacity', 0.9)
-            .attr('stroke', showContourLines ? '#000000' : 'none')
-            .attr('stroke-width', showContourLines ? 1 : 0)
-            .attr('stroke-opacity', showContourLines ? 0.6 : 0);
-          
-          // Check if path was actually rendered (not clipped out)
-          const pathNode = path.node();
-          const pathData = pathNode?.getAttribute('d');
-          if (pathData && pathData !== '' && pathData !== 'M0,0' && pathNode) {
-            renderedCount++;
-            
-            // Add label to contour (only if contour lines are enabled)
-            if (showContourLines) {
-              // Find a good position along the path (at 50% of path length)
-              try {
-                const pathLength = pathNode.getTotalLength();
-                if (pathLength > 20) { // Only label if path is long enough
-                  const labelPosition = pathNode.getPointAtLength(pathLength * 0.5);
-                  const labelPosition2 = pathNode.getPointAtLength(pathLength * 0.5 + 1);
-                  
-                  // Calculate angle for text rotation to follow path
-                  const angle = Math.atan2(
-                    labelPosition2.y - labelPosition.y,
-                    labelPosition2.x - labelPosition.x
-                  ) * 180 / Math.PI;
-                  
-                  // Add text label
-                  contourGroup.append('text')
-                    .attr('x', labelPosition.x)
-                    .attr('y', labelPosition.y)
-                    .attr('text-anchor', 'middle')
-                    .attr('alignment-baseline', 'middle')
-                    .attr('transform', `rotate(${angle}, ${labelPosition.x}, ${labelPosition.y})`)
-                    .style('font-size', '11px')
-                    .style('font-weight', '600')
-                    .style('fill', '#000000')
-                    .style('stroke', '#ffffff')
-                    .style('stroke-width', '3px')
-                    .style('stroke-opacity', '0.8')
-                    .style('paint-order', 'stroke')
-                    .text(`${contourValue.toFixed(1)}°C`);
-                }
-              } catch (labelError) {
-                // If label positioning fails, just skip it
-                console.warn('[Map] Could not add label to contour:', labelError);
-              }
-            }
-            
-            if (renderedCount === 1) {
-              console.log(`[Map] First rendered contour: value=${contourValue}°C, path length=${pathData.length}`);
-            }
-          } else {
-            skippedCount++;
-          }
-        } catch (error) {
-          console.error('[Map] Error rendering contour:', error, {
-            value: contour.value,
-            type: contour.type,
-            coordinatesLength: Array.isArray(coords) ? coords.length : 'N/A',
-            firstCoord: Array.isArray(coords) && coords.length > 0 ? coords[0] : 'N/A'
-          });
-          skippedCount++;
-        }
-      });
-      
-      console.log(`[Map] Rendered ${renderedCount} visible contours, skipped ${skippedCount} empty contours out of ${contourData.length} total`);
     }
+    
+    console.log(`[Map] Grid size: ${gridWidth}x${gridHeight}, SST range: ${minSST.toFixed(1)}°C to ${maxSST.toFixed(1)}°C`);
+    console.log(`[Map] Flat array length: ${values.length}, expected: ${gridWidth * gridHeight}`);
+    
+    // Create contour generator
+    // Generate contours every 0.5°C from -2°C to 35°C (extended for cold water)
+    const contourThresholds = d3.range(-2, 35.5, 0.5);
+    const contourGenerator = contours()
+      .size([gridWidth, gridHeight])
+      .thresholds(contourThresholds);
+    
+    // Generate contours - pass flat array directly
+    // d3-contour expects: values[i + j*n] where (i, j) is position (column, row)
+    const contourData = contourGenerator(values) as Array<{
+      type: string;
+      value: number;
+      coordinates: number[][][] | number[][][][];
+    }>;
+    
+    console.log(`[Map] Generated ${contourData.length} contours`);
+    
+    if (contourData.length > 0) {
+      const firstContour = contourData[0];
+      console.log(`[Map] First contour sample:`, {
+        value: firstContour.value,
+        type: firstContour.type,
+        hasCoordinates: 'coordinates' in firstContour,
+        coordinatesType: Array.isArray(firstContour.coordinates) ? 'array' : typeof firstContour.coordinates,
+        coordinatesLength: Array.isArray(firstContour.coordinates) ? firstContour.coordinates.length : 'N/A',
+        firstCoordSample: Array.isArray(firstContour.coordinates) && firstContour.coordinates.length > 0 
+          ? firstContour.coordinates[0] 
+          : 'N/A',
+        fullStructure: JSON.stringify(firstContour, null, 2).substring(0, 500)
+      });
+    }
+    
+    // Create scale functions to convert grid indices to geographic coordinates
+    const lonScale = d3.scaleLinear()
+      .domain([0, gridWidth - 1])
+      .range([uniqueLons[0], uniqueLons[gridWidth - 1]]);
+    
+    const latScale = d3.scaleLinear()
+      .domain([0, gridHeight - 1])
+      .range([uniqueLats[0], uniqueLats[gridHeight - 1]]);
+    
+    console.log(`[Map] Coordinate scales: lon [${uniqueLons[0]}, ${uniqueLons[gridWidth - 1]}], lat [${uniqueLats[0]}, ${uniqueLats[gridHeight - 1]}]`);
+    
+    // Render contours as filled polygons
+    const contourGroup = g.append('g').attr('class', 'sst-contours');
+    
+    let renderedCount = 0;
+    let skippedCount = 0;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    contourData.forEach((contour: any) => {
+      // d3-contour returns GeoJSON-like structures
+      // The coordinates property should be an array of rings (for Polygon) or polygons (for MultiPolygon)
+      const coords = contour.coordinates;
+      
+      // Check if coordinates exist and have data
+      if (!coords) {
+        skippedCount++;
+        return;
+      }
+      
+      // For Polygon: coordinates is array of rings, each ring is array of [x,y] pairs
+      // For MultiPolygon: coordinates is array of polygons, each polygon is array of rings
+      const hasData = Array.isArray(coords) && coords.length > 0;
+      if (!hasData) {
+        skippedCount++;
+        return;
+      }
+      
+      // Transform contour coordinates from grid space to geographic space
+      const transformCoordinates = (coords: number[][]): number[][] => {
+        return coords.map(([x, y]) => {
+          const lon = lonScale(x);
+          const lat = latScale(y);
+          return [lon, lat];
+        });
+      };
+      
+      let geoContour: GeoJSON.Polygon | GeoJSON.MultiPolygon;
+      
+      // Check contour type - d3-contour returns "Polygon" or "MultiPolygon"
+      const isMultiPolygon = contour.type === 'MultiPolygon';
+      
+      try {
+        if (isMultiPolygon) {
+          // MultiPolygon: coordinates is an array of polygons, each polygon is an array of rings
+          const polygons = coords as number[][][][];
+          if (polygons.length === 0 || polygons[0].length === 0) {
+            skippedCount++;
+            return;
+          }
+          geoContour = {
+            type: 'MultiPolygon',
+            coordinates: polygons.map(polygon =>
+              polygon.map(ring => transformCoordinates(ring as number[][]))
+            )
+          };
+        } else {
+          // Polygon: coordinates is an array of rings, each ring is an array of [x,y] pairs
+          const rings = coords as number[][][];
+          if (rings.length === 0 || rings[0].length === 0) {
+            skippedCount++;
+            return;
+          }
+          geoContour = {
+            type: 'Polygon',
+            coordinates: rings.map(ring => 
+              transformCoordinates(ring as number[][])
+            )
+          };
+        }
+        
+        // Get the contour value
+        const contourValue = contour.value;
+        
+        // Render the contour as a path with optional stroke
+        const path = contourGroup.append('path')
+          .datum(geoContour)
+          .attr('d', pathGenerator)
+          .attr('fill', colorScale(contourValue))
+          .attr('opacity', 0.9)
+          .attr('stroke', showContourLines ? '#000000' : 'none')
+          .attr('stroke-width', showContourLines ? 1 : 0)
+          .attr('stroke-opacity', showContourLines ? 0.6 : 0);
+        
+        // Check if path was actually rendered (not clipped out)
+        const pathNode = path.node();
+        const pathData = pathNode?.getAttribute('d');
+        if (pathData && pathData !== '' && pathData !== 'M0,0' && pathNode) {
+          renderedCount++;
+          
+          // Add label to contour (only if contour lines are enabled)
+          if (showContourLines) {
+            // Find a good position along the path (at 50% of path length)
+            try {
+              const pathLength = pathNode.getTotalLength();
+              if (pathLength > 20) { // Only label if path is long enough
+                const labelPosition = pathNode.getPointAtLength(pathLength * 0.5);
+                const labelPosition2 = pathNode.getPointAtLength(pathLength * 0.5 + 1);
+                
+                // Calculate angle for text rotation to follow path
+                const angle = Math.atan2(
+                  labelPosition2.y - labelPosition.y,
+                  labelPosition2.x - labelPosition.x
+                ) * 180 / Math.PI;
+                
+                // Add text label
+                contourGroup.append('text')
+                  .attr('x', labelPosition.x)
+                  .attr('y', labelPosition.y)
+                  .attr('text-anchor', 'middle')
+                  .attr('alignment-baseline', 'middle')
+                  .attr('transform', `rotate(${angle}, ${labelPosition.x}, ${labelPosition.y})`)
+                  .style('font-size', '11px')
+                  .style('font-weight', '600')
+                  .style('fill', '#000000')
+                  .style('stroke', '#ffffff')
+                  .style('stroke-width', '3px')
+                  .style('stroke-opacity', '0.8')
+                  .style('paint-order', 'stroke')
+                  .text(`${contourValue.toFixed(1)}°C`);
+              }
+            } catch (labelError) {
+              // If label positioning fails, just skip it
+              console.warn('[Map] Could not add label to contour:', labelError);
+            }
+          }
+          
+          if (renderedCount === 1) {
+            console.log(`[Map] First rendered contour: value=${contourValue}°C, path length=${pathData.length}`);
+          }
+        } else {
+          skippedCount++;
+        }
+      } catch (error) {
+        console.error('[Map] Error rendering contour:', error, {
+          value: contour.value,
+          type: contour.type,
+          coordinatesLength: Array.isArray(coords) ? coords.length : 'N/A',
+          firstCoord: Array.isArray(coords) && coords.length > 0 ? coords[0] : 'N/A'
+        });
+        skippedCount++;
+      }
+    });
+    
+    console.log(`[Map] Rendered ${renderedCount} visible contours, skipped ${skippedCount} empty contours out of ${contourData.length} total`);
     
     // Add invisible point overlay for tooltips
     g.selectAll('circle.hover-target')
@@ -995,14 +940,15 @@ export default function D3SSTMap({ width: propWidth, height: propHeight, onDataD
         </div>
       )}
       
-      {/* Tooltip */}
+      {/* Tooltip - positioned relative to SVG container */}
       {tooltip.show && (
         <div
           className="absolute pointer-events-none bg-black/90 text-white px-3 py-2 rounded text-sm whitespace-pre-line z-50 shadow-lg border border-gray-600"
           style={{
-            left: tooltip.x,
-            top: tooltip.y,
-            transform: 'translate(-50%, -100%)'
+            left: `${tooltip.x}px`,
+            top: `${tooltip.y}px`,
+            transform: 'translate(-50%, -100%)',
+            marginTop: '-8px' // Small offset above cursor
           }}
         >
           {tooltip.content}

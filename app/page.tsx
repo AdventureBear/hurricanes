@@ -3,7 +3,6 @@
 import { useState } from 'react';
 import D3SSTMap from '@/components/d3-sst-map';
 import D3PressureMap from '@/components/d3-pressure-map';
-import PressureColorLegend from '@/components/pressure-color-legend';
 
 export default function Home() {
   const [dataDate, setDataDate] = useState<string | null>(null);
@@ -41,9 +40,6 @@ export default function Home() {
           <div className="flex gap-4">
             <div className="flex-1">
               <D3PressureMap onDataDateChange={setPressureDataDate} />
-            </div>
-            <div className="w-24">
-              <PressureColorLegend width={80} height={400} />
             </div>
           </div>
         </div>

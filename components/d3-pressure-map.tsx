@@ -8,6 +8,7 @@ import type { PIDataResponse } from '../types/pi';
 import type { Basin, GeographicBounds } from '../types/geographic';
 import basinsDataRaw from '../rules/basins.json';
 import { calculatePIData } from '../app/actions/calculate-pi';
+import { renderD3MapBase } from './d3-map-base';
 
 /**
  * DEFAULT PROJECTION: Mercator (geoMercator)
@@ -153,6 +154,7 @@ export default function D3PressureMap({ width: propWidth, height: propHeight, on
   }, [fetchData]);
 
   // Filter data when basin or global data changes
+  // Note: Land filtering is now handled by SVG masking in the base renderer (much faster)
   useEffect(() => {
     if (!data) {
       setFilteredData(null);
@@ -162,11 +164,15 @@ export default function D3PressureMap({ width: propWidth, height: propHeight, on
     console.log(`[Pressure Map] Filtering ${data.pointCount} global points for ${selectedBasin.basin}...`);
     const clipBounds = basinToBounds(selectedBasin);
     
-    // Filter data to selected basin bounds and valid pressure values
-    // Pressure range: 880-1020 mb (includes normal surface pressure ~1013 mb)
+    // Filter data to selected basin bounds
+    // Note: We trust the PI calculation equations - only filter obviously invalid values (NaN, negative, extreme)
+    // Land filtering is now done via SVG masking in the base renderer (much faster than point-by-point)
     const filteredPoints = data.gridPoints.filter(p => {
-      // Check pressure validity (reasonable atmospheric pressure range)
-      if (p.pmin < 880 || p.pmin > 1020 || isNaN(p.pmin)) return false;
+      // Only filter obviously invalid values - let the equations determine what's realistic
+      // Filter NaN, negative values, or extremely high values (>2000mb = likely unit error)
+      if (isNaN(p.pmin) || p.pmin < 0 || p.pmin > 2000) {
+        return false;
+      }
       
       // Check latitude
       if (p.lat < clipBounds.minLat || p.lat > clipBounds.maxLat) return false;
@@ -179,44 +185,42 @@ export default function D3PressureMap({ width: propWidth, height: propHeight, on
       }
     });
     
-    console.log(`[Pressure Map] Filtered to ${filteredPoints.length} points within ${selectedBasin.basin} bounds`);
+    // Diagnostic: Log pressure value distribution
+    if (filteredPoints.length > 0) {
+      const pressures = filteredPoints.map(p => p.pmin);
+      const minP = Math.min(...pressures);
+      const maxP = Math.max(...pressures);
+      const avgP = pressures.reduce((a, b) => a + b, 0) / pressures.length;
+      const lowPressures = pressures.filter(p => p < 900).length;
+      const veryLowPressures = pressures.filter(p => p < 880);
+      
+      console.log(`[Pressure Map] Filtered to ${filteredPoints.length} points within ${selectedBasin.basin} bounds`);
+      console.log(`[Pressure Map] Pressure range: ${minP.toFixed(1)} - ${maxP.toFixed(1)} mb (avg: ${avgP.toFixed(1)} mb)`);
+      console.log(`[Pressure Map] Points with pmin < 900mb: ${lowPressures} (these are the intense storm regions)`);
+      
+      // Troubleshooting: Log values < 880mb
+      if (veryLowPressures.length > 0) {
+        console.warn(`[Pressure Map] ⚠️ Found ${veryLowPressures.length} points with pmin < 880mb (troubleshooting)`);
+        const sampleLow = veryLowPressures.slice(0, 10).sort((a, b) => a - b);
+        console.warn(`[Pressure Map] Sample low pressures: ${sampleLow.map(p => p.toFixed(1)).join(', ')} mb`);
+        
+        // Find actual points with these low pressures for inspection
+        const lowPressurePoints = filteredPoints
+          .filter(p => p.pmin < 880)
+          .slice(0, 5)
+          .map(p => `(${p.lat.toFixed(2)}°N, ${p.lon.toFixed(2)}°W): ${p.pmin.toFixed(1)}mb, vmax=${p.vmax.toFixed(0)}kt, SST=${p.sst.toFixed(1)}°C`);
+        console.warn(`[Pressure Map] Sample locations with pmin < 880mb:`, lowPressurePoints);
+      }
+      
+      console.log(`[Pressure Map] Land filtering will be handled by SVG masking (no point-by-point checks needed)`);
+    }
     
-    // Additional filtering: Use TopoJSON land data to filter out points over land
-    fetch('/data/countries-110m.json')
-      .then(res => res.json())
-      .then((world) => {
-        const land = topojson.feature(world as any, (world as any).objects.countries);
-        const features = (land as unknown as GeoJSON.FeatureCollection).features;
-        
-        // Filter out points that are over land using d3.geoContains
-        const oceanOnlyPoints = filteredPoints.filter(p => {
-          const point: GeoJSON.Position = [p.lon, p.lat];
-          for (const feature of features) {
-            if (d3.geoContains(feature, point)) {
-              return false; // Point is over land
-            }
-          }
-          return true; // Point is over ocean
-        });
-        
-        console.log(`[Pressure Map] Filtered out ${filteredPoints.length - oceanOnlyPoints.length} land points`);
-        
-        setFilteredData({
-          ...data,
-          gridPoints: oceanOnlyPoints,
-          pointCount: oceanOnlyPoints.length,
-          bounds: clipBounds
-        });
-      })
-      .catch(err => {
-        console.warn('[Pressure Map] Could not load land data for filtering, using all points:', err);
-        setFilteredData({
-          ...data,
-          gridPoints: filteredPoints,
-          pointCount: filteredPoints.length,
-          bounds: clipBounds
-        });
-      });
+    setFilteredData({
+      ...data,
+      gridPoints: filteredPoints, // Include all points - mask will hide land ones
+      pointCount: filteredPoints.length,
+      bounds: clipBounds
+    });
   }, [data, selectedBasin]);
 
   // Refresh handler
@@ -228,214 +232,38 @@ export default function D3PressureMap({ width: propWidth, height: propHeight, on
 
   // Render D3 map when filtered data changes
   useEffect(() => {
-    if (!filteredData || !svgRef.current) {
-      console.log('[Pressure Map] Skipping render - no filtered data or SVG ref');
-      return;
-    }
+    if (!filteredData) return;
     
-    if (isRenderingRef.current) {
-      console.log('[Pressure Map] Render already in progress, skipping...');
-      return;
-    }
-    
-    isRenderingRef.current = true;
-    console.log(`[Pressure Map] Starting render for ${selectedBasin.basin} with ${filteredData.pointCount} points...`);
-
-    const svg = d3.select(svgRef.current);
-    svg.selectAll('*').remove();
-
-    const basePadding = Math.min(width, height) * 0.03;
-    const padding = {
-      top: 0,
-      bottom: Math.max(20, basePadding),
-      left: Math.max(35, basePadding * 1.5),
-      right: 0
-    };
-    
-    const mapWidth = width - padding.left - padding.right;
-    const mapHeight = height - padding.top - padding.bottom;
-
-    const clipBounds = filteredData.bounds;
-    const centerLon = (clipBounds.minLon + clipBounds.maxLon) / 2;
-    const centerLat = (clipBounds.minLat + clipBounds.maxLat) / 2;
-    
-    const lonRange = clipBounds.maxLon - clipBounds.minLon;
-    const latRange = clipBounds.maxLat - clipBounds.minLat;
-    const aspectRatio = mapWidth / mapHeight;
-    const basinAspectRatio = lonRange / latRange;
-    
-    let scale = 700;
-    if (basinAspectRatio > aspectRatio) {
-      scale = (mapWidth * 0.95) / (lonRange * Math.PI / 180);
-    } else {
-      scale = (mapHeight * 0.95) / (latRange * Math.PI / 180);
-    }
-    
-    const mapCenterX = padding.left + mapWidth / 2;
-    const mapCenterY = padding.top + mapHeight / 2;
-    
-    const projection = geoMercator()
-      .center([centerLon, centerLat])
-      .scale(scale)
-      .translate([mapCenterX, mapCenterY]);
-
-    projectionRef.current = projection;
-    
-    const pathGenerator = d3.geoPath().projection(projection);
-    pathGeneratorRef.current = pathGenerator;
-
-    // Clip path for map bounds
-    const clipX = padding.left;
-    const clipY = padding.top;
-    const clipWidth = mapWidth;
-    const clipHeight = mapHeight;
-
-    const clipPathId = 'pressure-map-clip';
-    const defs = svg.append('defs');
-    defs.append('clipPath')
-      .attr('id', clipPathId)
-      .append('rect')
-      .attr('x', clipX)
-      .attr('y', clipY)
-      .attr('width', clipWidth)
-      .attr('height', clipHeight);
-
-    const g = svg.append('g').attr('clip-path', `url(#${clipPathId})`);
-
-    // Use pressure color scale (880-1020 mb)
-    const colorScale = d3.scaleSequential<string>()
-      .domain([880, 1020])
-      .interpolator((t: number) => d3.interpolateSpectral(1 - t));
-
-    // Render grid cells (similar to SST map)
-    const gridGroup = g.append('g').attr('class', 'pressure-grid');
-    const halfCell = 0.25; // 0.5° resolution
-    
-    filteredData.gridPoints.forEach(d => {
-      const overlap = 0.01;
-      const lonMin = d.lon - halfCell - overlap;
-      const lonMax = d.lon + halfCell + overlap;
-      const latMin = d.lat - halfCell - overlap;
-      const latMax = d.lat + halfCell + overlap;
-      
-      const corners = [
-        projection([lonMin, latMin]),
-        projection([lonMax, latMin]),
-        projection([lonMax, latMax]),
-        projection([lonMin, latMax])
-      ];
-      
-      if (corners.every(c => c !== null)) {
-        const xs = corners.map(c => c![0]);
-        const ys = corners.map(c => c![1]);
-        const x = Math.min(...xs);
-        const y = Math.min(...ys);
-        const cellWidth = Math.max(...xs) - x;
-        const cellHeight = Math.max(...ys) - y;
-        
-        gridGroup.append('rect')
-          .attr('x', x)
-          .attr('y', y)
-          .attr('width', cellWidth)
-          .attr('height', cellHeight)
-          .attr('fill', colorScale(d.pmin))
-          .attr('opacity', 0.95)
-          .attr('stroke', 'none')
-          .attr('class', 'hover-target')
-          .on('mouseenter', function(event) {
-            setTooltip({
-              show: true,
-              x: event.pageX + 10,
-              y: event.pageY - 10,
-              content: `Lat: ${d.lat.toFixed(2)}°, Lon: ${d.lon.toFixed(2)}°\nPressure: ${d.pmin.toFixed(1)} mb\nWind: ${d.vmax.toFixed(0)} kt (${d.category})`
-            });
-          })
-          .on('mouseleave', function() {
-            setTooltip(prev => ({ ...prev, show: false }));
-          });
-      }
+    // Use base renderer - ensures identical layout, projection, labels, and legend alignment with SST map
+    renderD3MapBase({
+      svgRef,
+      filteredData,
+      selectedBasin,
+      width,
+      height,
+      config: {
+        colorScale: () => {
+          // Use fixed domain for consistent color mapping and legend alignment
+          // The equations should produce values in a reasonable range
+          return d3.scaleSequential<string>()
+            .domain([880, 1030])
+            .interpolator((t: number) => d3.interpolateSpectral(1 - t));
+        },
+        legendDomain: [880, 1030] as [number, number], // Fixed legend range - matches color scale domain
+        legendFormat: (value: number) => `${value} mb`,
+        legendTitle: 'Pressure (mb)',
+        getValue: (point) => point.pmin,
+        formatTooltip: (point) => {
+          // Add diagnostic info to tooltip
+          return `Lat: ${point.lat.toFixed(2)}°, Lon: ${point.lon.toFixed(2)}°\nPressure: ${point.pmin.toFixed(1)} mb\nWind: ${point.vmax.toFixed(0)} kt (${point.category})\nSST: ${point.sst.toFixed(1)}°C`;
+        },
+        isValidValue: (value) => !isNaN(value) && value > 0 && value < 2000 // Only filter obviously invalid values
+      },
+      projectionRef,
+      pathGeneratorRef,
+      isRenderingRef,
+      setTooltip
     });
-
-    // Load and render coastlines
-    fetch('/data/countries-110m.json')
-      .then(res => res.json())
-      .then((world) => {
-        const land = topojson.feature(world as any, (world as any).objects.countries);
-        const features = (land as unknown as GeoJSON.FeatureCollection).features;
-        
-        const expandedBounds = {
-          minLon: clipBounds.minLon - 2,
-          maxLon: clipBounds.maxLon + 2,
-          minLat: clipBounds.minLat - 2,
-          maxLat: clipBounds.maxLat + 2
-        };
-        
-        const filteredFeatures = features.filter(f => {
-          if (f.geometry.type === 'Polygon' || f.geometry.type === 'MultiPolygon') {
-            const coords = f.geometry.type === 'Polygon' 
-              ? f.geometry.coordinates[0] 
-              : f.geometry.coordinates.flat()[0];
-            
-            if (coords && coords.length > 0) {
-              const lons = coords.map((c: number[]) => c[0]);
-              const lats = coords.map((c: number[]) => c[1]);
-              const minLon = Math.min(...lons);
-              const maxLon = Math.max(...lons);
-              const minLat = Math.min(...lats);
-              const maxLat = Math.max(...lats);
-              
-              return !(maxLon < expandedBounds.minLon || minLon > expandedBounds.maxLon ||
-                       maxLat < expandedBounds.minLat || minLat > expandedBounds.maxLat);
-            }
-          }
-          return false;
-        });
-        
-        const currentPathGenerator = pathGeneratorRef.current;
-        if (!currentPathGenerator) {
-          console.error('[Pressure Map] PathGenerator not available for coastlines');
-          return;
-        }
-        
-        g.append('g')
-          .attr('class', 'coastlines')
-          .selectAll('path')
-          .data(filteredFeatures)
-          .enter()
-          .append('path')
-          .attr('d', d => currentPathGenerator(d as GeoJSON.Feature))
-          .attr('fill', 'none')
-          .attr('stroke', '#333')
-          .attr('stroke-width', 1.5)
-          .attr('opacity', 0.9)
-          .attr('pointer-events', 'none');
-      })
-      .catch(err => console.error('[Pressure Map] Error loading coastlines:', err));
-
-    // Add graticule
-    const graticule = d3.geoGraticule()
-      .extent([[clipBounds.minLon, clipBounds.minLat], [clipBounds.maxLon, clipBounds.maxLat]]);
-    
-    g.append('path')
-      .datum(graticule())
-      .attr('d', pathGenerator)
-      .attr('fill', 'none')
-      .attr('stroke', '#ccc')
-      .attr('stroke-width', 0.5)
-      .attr('opacity', 0.5);
-
-    // Add border
-    g.append('rect')
-      .attr('x', clipX)
-      .attr('y', clipY)
-      .attr('width', clipWidth)
-      .attr('height', clipHeight)
-      .attr('fill', 'none')
-      .attr('stroke', '#000')
-      .attr('stroke-width', 2);
-
-    isRenderingRef.current = false;
-    console.log('[Pressure Map] Rendering complete');
   }, [filteredData, selectedBasin, width, height]);
 
   if (loading) {
@@ -467,16 +295,28 @@ export default function D3PressureMap({ width: propWidth, height: propHeight, on
   }
 
   return (
-    <div className="relative">
-      <svg ref={svgRef} width={width} height={height} className="bg-white border border-gray-300" />
+    <div className="relative w-full max-w-full" id="map-container">
+      {/* Map and Legend Container - Single SVG contains both */}
+      <div className="bg-white rounded-lg border border-gray-300 p-2 shadow-lg" style={{ overflow: 'visible', maxWidth: '100%' }}>
+        <svg
+          ref={svgRef}
+          width={width}
+          height={height}
+          className="bg-white"
+          style={{ display: 'block', width: '100%', maxWidth: '100%', height: 'auto', overflow: 'visible' }}
+          preserveAspectRatio="xMidYMid meet"
+        />
+      </div>
       
-      {/* Tooltip */}
+      {/* Tooltip - positioned relative to SVG container */}
       {tooltip.show && (
         <div
-          className="absolute bg-black text-white px-3 py-2 rounded shadow-lg text-sm pointer-events-none z-50 whitespace-pre-line"
+          className="absolute pointer-events-none bg-black/90 text-white px-3 py-2 rounded text-sm whitespace-pre-line z-50 shadow-lg border border-gray-600"
           style={{
             left: `${tooltip.x}px`,
             top: `${tooltip.y}px`,
+            transform: 'translate(-50%, -100%)',
+            marginTop: '-8px' // Small offset above cursor
           }}
         >
           {tooltip.content}
@@ -495,4 +335,3 @@ export default function D3PressureMap({ width: propWidth, height: propHeight, on
     </div>
   );
 }
-
