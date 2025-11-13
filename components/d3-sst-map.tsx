@@ -184,10 +184,10 @@ export default function D3SSTMap({ width: propWidth, height: propHeight, onDataD
     // Filter data to selected basin bounds and valid SST values
     // Handle longitude wraparound (e.g., South Pacific: 160°E to -120°W)
     const filteredPoints = data.gridPoints.filter(p => {
-      // Check SST validity
+      // Check SST validity - filter out invalid values (land points often have unrealistic temps)
       // Allow temperatures from -2°C (sea ice areas) to 35°C (tropical maximum)
       // NSST can have valid cold water temperatures, especially in high latitudes
-      if (p.sst < -2 || p.sst > 35) return false;
+      if (p.sst < -2 || p.sst > 35 || isNaN(p.sst)) return false;
       
       // Check latitude
       if (p.lat < clipBounds.minLat || p.lat > clipBounds.maxLat) return false;
@@ -204,12 +204,47 @@ export default function D3SSTMap({ width: propWidth, height: propHeight, onDataD
     
     console.log(`[Map] Filtered to ${filteredPoints.length} points within ${selectedBasin.basin} bounds`);
     
-    setFilteredData({
-      ...data,
-      gridPoints: filteredPoints,
-      pointCount: filteredPoints.length,
-      bounds: clipBounds
-    });
+    // Additional filtering: Use TopoJSON land data to filter out points over land
+    // This is done asynchronously after coastlines load
+    fetch('/data/countries-110m.json')
+      .then(res => res.json())
+      .then((world) => {
+        // Extract land features
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const land = topojson.feature(world as any, (world as any).objects.countries);
+        const features = (land as unknown as GeoJSON.FeatureCollection).features;
+        
+        // Filter out points that are over land using d3.geoContains
+        const oceanOnlyPoints = filteredPoints.filter(p => {
+          const point: GeoJSON.Position = [p.lon, p.lat];
+          // Check if point is contained in any land polygon
+          for (const feature of features) {
+            if (d3.geoContains(feature, point)) {
+              return false; // Point is over land
+            }
+          }
+          return true; // Point is over ocean
+        });
+        
+        console.log(`[Map] Filtered out ${filteredPoints.length - oceanOnlyPoints.length} land points`);
+        
+        setFilteredData({
+          ...data,
+          gridPoints: oceanOnlyPoints,
+          pointCount: oceanOnlyPoints.length,
+          bounds: clipBounds
+        });
+      })
+      .catch(err => {
+        console.warn('[Map] Could not load land data for filtering, using all points:', err);
+        // Fallback: use points without land filtering
+        setFilteredData({
+          ...data,
+          gridPoints: filteredPoints,
+          pointCount: filteredPoints.length,
+          bounds: clipBounds
+        });
+      });
   }, [data, selectedBasin]);
 
 
@@ -470,9 +505,10 @@ export default function D3SSTMap({ width: propWidth, height: propHeight, onDataD
     
     if (visualizationMode === 'gridded') {
       // Render each grid cell as a rectangle
-      // Each data point is the CENTER of a 0.25° x 0.25° grid cell
-      // Cell boundaries are ±0.125° from center
-      const halfCell = 0.125; // half of 0.25°
+      // Data resolution: 0.5° x 0.5° (from rtgssthr_grb_0.5.grib2)
+      // Each data point is the CENTER of a 0.5° x 0.5° grid cell
+      // Cell boundaries are ±0.25° from center
+      const halfCell = 0.25; // half of 0.5°
       
       // Render grid cells - use exact same projection as coastlines
       const gridGroup = g.append('g').attr('class', 'sst-grid');

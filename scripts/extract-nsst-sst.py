@@ -113,19 +113,25 @@ def extract_sst_grid(grib_file: str, bounds: Dict[str, float]) -> List[Dict[str,
                 bounds['minLon'] <= lon <= bounds['maxLon']):
                 
                 # Filter out land points and invalid values
-                # 1. Check for missing value indicator (land points)
-                if missing_value is not None and abs(sst_raw - missing_value) < 0.1:
-                    land_count += 1
-                    invalid_count += 1
-                    continue
-                
-                # 2. Check for NaN
+                # 1. Check for NaN first
                 if np.isnan(sst_raw):
                     invalid_count += 1
                     continue
                 
+                # 2. Check for missing value indicator (land points)
+                # Missing values are typically 9999 or very large numbers
+                if missing_value is not None:
+                    # Check if value matches missing value (with tolerance for floating point)
+                    if abs(sst_raw - missing_value) < 1.0:
+                        land_count += 1
+                        invalid_count += 1
+                        continue
+                
                 # 3. Check for valid ocean SST range (in Kelvin if needed)
+                # This is the primary filter for land points - land temps are outside ocean range
                 if is_kelvin:
+                    # Valid ocean SST: 271K (-2°C) to 308K (35°C)
+                    # Land temperatures can be much colder (winter) or hotter (desert)
                     if sst_raw < valid_sst_min_k or sst_raw > valid_sst_max_k:
                         land_count += 1
                         invalid_count += 1
