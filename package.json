@@ -6,7 +6,9 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test": "TEST_MODE=true npx tsx scripts/test-runner.ts",
+    "test:production": "TEST_MODE=false npx tsx scripts/test-runner.ts"
   },
   "dependencies": {
     "@types/d3": "^7.4.3",

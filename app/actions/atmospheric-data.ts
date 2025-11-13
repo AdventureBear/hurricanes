@@ -13,17 +13,16 @@ import { fetchAtmosphericData } from '@/lib/atmospheric-fetcher';
 import { isCacheValid, readCache, writeCache } from '@/lib/cache-manager';
 import type { AtmosphericDataResponse } from '@/types/atmospheric';
 import type { GeographicBounds } from '@/types/geographic';
+import { getAtmosphericCacheDir, getCachePrefix } from '@/lib/cache-config';
 import * as path from 'path';
 import * as fs from 'fs/promises';
-
-const ATMOSPHERIC_CACHE_DIR = path.join(process.cwd(), 'data', 'cache', 'atmospheric');
 
 /**
  * Ensures the atmospheric cache directory exists
  */
 async function ensureAtmosphericCacheDir(): Promise<void> {
   try {
-    await fs.mkdir(ATMOSPHERIC_CACHE_DIR, { recursive: true });
+    await fs.mkdir(getAtmosphericCacheDir(), { recursive: true });
   } catch (error) {
     console.error('[Atmospheric Action] Error creating cache directory:', error);
     throw error;
@@ -34,7 +33,8 @@ async function ensureAtmosphericCacheDir(): Promise<void> {
  * Gets the cache file path for atmospheric data
  */
 function getAtmosphericCachePath(date: string): string {
-  return path.join(ATMOSPHERIC_CACHE_DIR, `atmospheric-${date}.json`);
+  const prefix = getCachePrefix();
+  return path.join(getAtmosphericCacheDir(), `${prefix}atmospheric-${date}.json`);
 }
 
 /**

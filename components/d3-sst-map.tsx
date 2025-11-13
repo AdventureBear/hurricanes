@@ -167,6 +167,20 @@ export default function D3SSTMap({ width: propWidth, height: propHeight, onDataD
     console.log(`[Map] Filtering ${data.pointCount} global points for ${selectedBasin.basin}...`);
     const clipBounds = basinToBounds(selectedBasin);
     
+    // Diagnostic: Check sample SST values to understand data format (use efficient approach for large arrays)
+    const sampleSSTs = data.gridPoints.slice(0, 10).map(p => p.sst);
+    let minSST = Infinity;
+    let maxSST = -Infinity;
+    for (const point of data.gridPoints) {
+      if (!isNaN(point.sst)) {
+        minSST = Math.min(minSST, point.sst);
+        maxSST = Math.max(maxSST, point.sst);
+      }
+    }
+    console.log(`[Map] Sample SST values: ${sampleSSTs.slice(0, 5).map(s => s.toFixed(2)).join(', ')}`);
+    console.log(`[Map] SST range: ${minSST.toFixed(2)} to ${maxSST.toFixed(2)}`);
+    console.log(`[Map] Basin bounds: ${clipBounds.minLat}°N-${clipBounds.maxLat}°N, ${clipBounds.minLon}°-${clipBounds.maxLon}°`);
+    
     // Filter data to selected basin bounds and valid SST values
     // Handle longitude wraparound (e.g., South Pacific: 160°E to -120°W)
     const filteredPoints = data.gridPoints.filter(p => {

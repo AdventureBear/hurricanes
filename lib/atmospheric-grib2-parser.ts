@@ -53,18 +53,27 @@ export async function parseAtmosphericGRIB2(
   
   try {
     const pythonStartTime = Date.now();
-    const { stdout, stderr } = await execAsync(
-      `"${pythonCmd}" "${scriptPath}" "${gribFilePath}" '${boundsJson}'`,
-      { maxBuffer: 100 * 1024 * 1024 } // 100MB buffer for large outputs
+    
+    // Use a temporary file for output to avoid stdout buffer limits
+    const tmpOutputPath = path.join(process.cwd(), 'data', 'cache', 'tmp', `atmospheric-extract-${Date.now()}.json`);
+    await fs.mkdir(path.dirname(tmpOutputPath), { recursive: true });
+    
+    // Run Python script and write output to temp file
+    const { stderr } = await execAsync(
+      `"${pythonCmd}" "${scriptPath}" "${gribFilePath}" '${boundsJson}' > "${tmpOutputPath}"`,
+      { maxBuffer: 10 * 1024 * 1024 } // 10MB buffer for stderr only (stdout goes to file)
     );
     
     const pythonTime = ((Date.now() - pythonStartTime) / 1000).toFixed(2);
     
-    // Python script outputs errors to stderr, data to stdout
+    // Python script outputs errors to stderr, data to stdout (redirected to file)
     if (stderr) {
       console.log(`[Atmospheric Parser] Python stderr output:`);
       console.log(stderr);
     }
+    
+    // Read the output file
+    const outputText = await fs.readFile(tmpOutputPath, 'utf-8');
     
     interface PythonOutput {
       lat: number;
@@ -72,7 +81,14 @@ export async function parseAtmosphericGRIB2(
       profile: RawAtmosphericProfile; // Raw profile from GFS (no SST)
     }
     
-    const rawProfiles: PythonOutput[] = JSON.parse(stdout);
+    const rawProfiles: PythonOutput[] = JSON.parse(outputText);
+    
+    // Clean up temp file
+    try {
+      await fs.unlink(tmpOutputPath);
+    } catch {
+      // Ignore cleanup errors
+    }
     
     // Convert to AtmosphericGridPoint format
     const gridPoints: AtmosphericGridPoint[] = rawProfiles.map((p: PythonOutput) => ({

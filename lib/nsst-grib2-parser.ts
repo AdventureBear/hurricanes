@@ -47,20 +47,35 @@ export async function parseNSSTGRIB2(
   
   try {
     const pythonStartTime = Date.now();
-    const { stdout, stderr } = await execAsync(
-      `python3 "${scriptPath}" "${gribFilePath}" '${boundsJson}'`,
-      { maxBuffer: 50 * 1024 * 1024 } // 50MB buffer for large outputs
+    
+    // Use a temporary file for output to avoid stdout buffer limits
+    const tmpOutputPath = path.join(process.cwd(), 'data', 'cache', 'tmp', `nsst-extract-${Date.now()}.json`);
+    await fs.mkdir(path.dirname(tmpOutputPath), { recursive: true });
+    
+    // Run Python script and write output to temp file
+    const { stderr } = await execAsync(
+      `python3 "${scriptPath}" "${gribFilePath}" '${boundsJson}' > "${tmpOutputPath}"`,
+      { maxBuffer: 10 * 1024 * 1024 } // 10MB buffer for stderr only (stdout goes to file)
     );
     
     const pythonTime = ((Date.now() - pythonStartTime) / 1000).toFixed(2);
     
-    // Python script outputs errors to stderr, data to stdout
+    // Python script outputs errors to stderr, data to stdout (redirected to file)
     if (stderr) {
       console.log(`[NSST Parser] Python stderr output:`);
       console.log(stderr);
     }
     
-    const points: SSTGridPoint[] = JSON.parse(stdout);
+    // Read the output file
+    const outputText = await fs.readFile(tmpOutputPath, 'utf-8');
+    const points: SSTGridPoint[] = JSON.parse(outputText);
+    
+    // Clean up temp file
+    try {
+      await fs.unlink(tmpOutputPath);
+    } catch {
+      // Ignore cleanup errors
+    }
     
     console.log(`[NSST Parser] ✓ Python extraction complete in ${pythonTime}s`);
     console.log(`[NSST Parser] ✓ Extracted ${points.length} SST grid points`);

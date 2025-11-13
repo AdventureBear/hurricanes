@@ -7,10 +7,16 @@ This directory contains test scripts for validating the Hurricane MPI Maps imple
 ### Run All Tests (Recommended)
 
 ```bash
+# Production mode (uses global coverage, production cache)
 npx tsx scripts/test-runner.ts
+
+# Test mode (uses 1° x 1° bounds, test cache in test/ subdirectories)
+TEST_MODE=true npx tsx scripts/test-runner.ts
 ```
 
 The test runner will execute all enabled tests. Edit `scripts/test-runner.ts` to enable/disable specific tests.
+
+**Note**: Test mode uses separate cache directories (`test/` subdirectories) and 1° x 1° bounds (25°N-26°N, -81°W to -80°W) for faster testing. Production mode uses full global coverage.
 
 ### Run Individual Tests
 

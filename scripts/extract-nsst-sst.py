@@ -64,7 +64,26 @@ def extract_sst_grid(grib_file: str, bounds: Dict[str, float]) -> List[Dict[str,
         lats, lons = sst_msg.latlons()
         values = sst_msg.values
         
-        print(f"[Python] Grid shape: {lats.shape}, value range: {np.nanmin(values):.2f}°C to {np.nanmax(values):.2f}°C", file=sys.stderr)
+        # Get missing value indicator (land points use this)
+        missing_value = getattr(sst_msg, 'missingValue', None)
+        if missing_value is not None:
+            print(f"[Python] Missing value indicator: {missing_value} (land points)", file=sys.stderr)
+        
+        # Check units and convert Kelvin to Celsius if needed
+        units = getattr(sst_msg, 'units', '').lower()
+        is_kelvin = 'k' in units or 'kelvin' in units
+        
+        # Valid SST range: -2°C to 35°C (ocean temperatures)
+        # In Kelvin: 271.15K to 308.15K
+        valid_sst_min_k = 271.0  # Slightly below -2°C to account for rounding
+        valid_sst_max_k = 308.5  # Slightly above 35°C to account for rounding
+        
+        if is_kelvin:
+            print(f"[Python] Values are in Kelvin, will convert to Celsius after filtering...", file=sys.stderr)
+            print(f"[Python] Grid shape: {lats.shape}, raw value range: {np.nanmin(values):.2f}K to {np.nanmax(values):.2f}K", file=sys.stderr)
+        else:
+            print(f"[Python] Variable units: {units}", file=sys.stderr)
+            print(f"[Python] Grid shape: {lats.shape}, value range: {np.nanmin(values):.2f} to {np.nanmax(values):.2f} ({units})", file=sys.stderr)
         
         # Convert to numpy arrays for easier filtering
         lats_flat = lats.flatten()
@@ -74,15 +93,16 @@ def extract_sst_grid(grib_file: str, bounds: Dict[str, float]) -> List[Dict[str,
         total_points = len(lats_flat)
         print(f"[Python] Total grid points: {total_points}", file=sys.stderr)
         
-        # Filter to bounds
+        # Filter to bounds and valid ocean SST values (exclude land)
         grid_points = []
         invalid_count = 0
         out_of_bounds_count = 0
+        land_count = 0
         
         for i in range(len(lats_flat)):
             lat = float(lats_flat[i])
             lon = float(lons_flat[i])
-            sst = float(values_flat[i])
+            sst_raw = float(values_flat[i])
             
             # Handle longitude wraparound (convert 0-360 to -180-180 if needed)
             if lon > 180:
@@ -91,18 +111,46 @@ def extract_sst_grid(grib_file: str, bounds: Dict[str, float]) -> List[Dict[str,
             # Check if within bounds
             if (bounds['minLat'] <= lat <= bounds['maxLat'] and
                 bounds['minLon'] <= lon <= bounds['maxLon']):
-                # Filter out missing/invalid values
-                # GRIB2 uses specific missing value indicators (typically very large negative numbers)
-                if sst > -100 and not np.isnan(sst):
-                    grid_points.append({
-                        'lat': round(lat, 2),
-                        'lon': round(lon, 2),
-                        'sst': round(sst, 2)
-                    })
-                else:
+                
+                # Filter out land points and invalid values
+                # 1. Check for missing value indicator (land points)
+                if missing_value is not None and abs(sst_raw - missing_value) < 0.1:
+                    land_count += 1
                     invalid_count += 1
+                    continue
+                
+                # 2. Check for NaN
+                if np.isnan(sst_raw):
+                    invalid_count += 1
+                    continue
+                
+                # 3. Check for valid ocean SST range (in Kelvin if needed)
+                if is_kelvin:
+                    if sst_raw < valid_sst_min_k or sst_raw > valid_sst_max_k:
+                        land_count += 1
+                        invalid_count += 1
+                        continue
+                    # Convert to Celsius
+                    sst = sst_raw - 273.15
+                else:
+                    # Already in Celsius, check range
+                    if sst_raw < -2 or sst_raw > 35:
+                        land_count += 1
+                        invalid_count += 1
+                        continue
+                    sst = sst_raw
+                
+                # Valid ocean point
+                grid_points.append({
+                    'lat': round(lat, 2),
+                    'lon': round(lon, 2),
+                    'sst': round(sst, 2)
+                })
             else:
                 out_of_bounds_count += 1
+        
+        if land_count > 0:
+            print(f"[Python]   Land points filtered: {land_count}", file=sys.stderr)
         
         grbs.close()
         

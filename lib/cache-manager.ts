@@ -1,16 +1,23 @@
 import fs from 'fs/promises';
 import path from 'path';
 import type { SSTDataResponse, CachedSSTData } from '../types/sst';
+import { getSSTCacheDir, getCachePrefix } from './cache-config';
 
-const CACHE_DIR = path.join(process.cwd(), 'data', 'cache', 'sst');
 const CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours in milliseconds
+
+/**
+ * Gets the cache directory (production or test based on TEST_MODE)
+ */
+function getCACHE_DIR(): string {
+  return getSSTCacheDir();
+}
 
 /**
  * Ensures the cache directory exists
  */
 async function ensureCacheDir(): Promise<void> {
   try {
-    await fs.mkdir(CACHE_DIR, { recursive: true });
+    await fs.mkdir(getCACHE_DIR(), { recursive: true });
   } catch (error) {
     console.error('[Cache] Error creating cache directory:', error);
     throw error;
@@ -19,20 +26,21 @@ async function ensureCacheDir(): Promise<void> {
 
 /**
  * Generates cache filename from date
- * Format: sst-YYYY-MM-DD.json
+ * Format: [test-]sst-YYYY-MM-DD.json
  */
 function getCacheFilename(date: Date = new Date()): string {
+  const prefix = getCachePrefix();
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, '0');
   const day = String(date.getDate()).padStart(2, '0');
-  return `sst-${year}-${month}-${day}.json`;
+  return `${prefix}sst-${year}-${month}-${day}.json`;
 }
 
 /**
  * Gets the full path for today's cache file
  */
 function getCacheFilePath(date: Date = new Date()): string {
-  return path.join(CACHE_DIR, getCacheFilename(date));
+  return path.join(getCACHE_DIR(), getCacheFilename(date));
 }
 
 /**
@@ -66,7 +74,7 @@ export async function isCacheValid(date: Date = new Date()): Promise<boolean> {
     let latestCache: CachedSSTData | null = null;
     
     for (const file of files) {
-      const filePath = path.join(CACHE_DIR, file);
+      const filePath = path.join(getCACHE_DIR(), file);
       try {
         const fileContent = await fs.readFile(filePath, 'utf-8');
         const cached: CachedSSTData = JSON.parse(fileContent);
@@ -102,7 +110,7 @@ export async function isCacheValid(date: Date = new Date()): Promise<boolean> {
       // Update lastChecked if it wasn't set (for old cache files)
       if (!latestCache.lastChecked) {
         latestCache.lastChecked = now;
-        const cachePath = path.join(CACHE_DIR, latestCache.filename);
+        const cachePath = path.join(getCACHE_DIR(), latestCache.filename);
         await fs.writeFile(cachePath, JSON.stringify(latestCache, null, 2), 'utf-8');
       }
       
@@ -117,7 +125,7 @@ export async function isCacheValid(date: Date = new Date()): Promise<boolean> {
     // Update lastChecked timestamp
     latestCache.lastChecked = now;
     // Write back the updated timestamp
-    const cachePath = path.join(CACHE_DIR, latestCache.filename);
+    const cachePath = path.join(getCACHE_DIR(), latestCache.filename);
     await fs.writeFile(cachePath, JSON.stringify(latestCache, null, 2), 'utf-8');
     
     // For NSST, cache is valid if it's less than 24 hours old
@@ -149,7 +157,7 @@ export async function readCache(date: Date = new Date()): Promise<SSTDataRespons
     let latestCache: CachedSSTData | null = null;
     
     for (const file of files) {
-      const filePath = path.join(CACHE_DIR, file);
+      const filePath = path.join(getCACHE_DIR(), file);
       try {
         const fileContent = await fs.readFile(filePath, 'utf-8');
         const cached: CachedSSTData = JSON.parse(fileContent);
@@ -211,8 +219,9 @@ export async function writeCache(data: SSTDataResponse, date: Date = new Date())
 export async function listCachedFiles(): Promise<string[]> {
   try {
     await ensureCacheDir();
-    const files = await fs.readdir(CACHE_DIR);
-    return files.filter(f => f.startsWith('sst-') && f.endsWith('.json'));
+    const files = await fs.readdir(getCACHE_DIR());
+    const prefix = getCachePrefix();
+    return files.filter(f => f.startsWith(`${prefix}sst-`) && f.endsWith('.json'));
   } catch (error) {
     console.error('[Cache] Error listing cached files:', error);
     return [];
@@ -228,7 +237,7 @@ export async function clearCache(): Promise<number> {
     let deleted = 0;
     
     for (const file of files) {
-      await fs.unlink(path.join(CACHE_DIR, file));
+      await fs.unlink(path.join(getCACHE_DIR(), file));
       deleted++;
     }
     
@@ -250,7 +259,7 @@ export async function clearOldCache(maxAgeDays: number = 30): Promise<number> {
     let deleted = 0;
     
     for (const file of files) {
-      const filePath = path.join(CACHE_DIR, file);
+      const filePath = path.join(getCACHE_DIR(), file);
       const stats = await fs.stat(filePath);
       const age = Date.now() - stats.mtimeMs;
       

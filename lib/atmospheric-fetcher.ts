@@ -20,15 +20,14 @@ import {
 import { fetchAndParseGRIB2Index } from './grib2-index-parser';
 import { fetchGRIB2Subset } from './grib2-subset-fetch';
 import { parseAtmosphericGRIB2 } from './atmospheric-grib2-parser';
-
-const GRIB2_CACHE_DIR = path.join(process.cwd(), 'data', 'cache', 'grib2', 'gfs');
+import { getGFSGRIB2CacheDir, getGRIB2Prefix } from './cache-config';
 
 /**
  * Ensures the GFS GRIB2 cache directory exists
  */
 async function ensureGFSGRIB2CacheDir(): Promise<void> {
   try {
-    await fs.mkdir(GRIB2_CACHE_DIR, { recursive: true });
+    await fs.mkdir(getGFSGRIB2CacheDir(), { recursive: true });
   } catch (error) {
     console.error('[Atmospheric] Error creating GFS GRIB2 cache directory:', error);
     throw error;
@@ -40,7 +39,8 @@ async function ensureGFSGRIB2CacheDir(): Promise<void> {
  */
 function getCachedGFSGRIB2Path(date: Date, forecastHour: string = '000'): string {
   const dateStr = formatDateString(date);
-  return path.join(GRIB2_CACHE_DIR, `gfs.${dateStr}.f${forecastHour}.grb2`);
+  const prefix = getGRIB2Prefix();
+  return path.join(getGFSGRIB2CacheDir(), `${prefix}gfs.${dateStr}.f${forecastHour}.grb2`);
 }
 
 /**

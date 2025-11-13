@@ -3,7 +3,9 @@
  * Builds URLs for NOMADS NSST (Near-surface Sea Surface Temperature) GRIB2 files
  * 
  * NSST files are available at:
- * https://nomads.ncep.noaa.gov/pub/data/nccf/com/nsst/prod/nsst.YYYYMMDD/nsst.YYYYMMDD.grb2
+ * https://nomads.ncep.noaa.gov/pub/data/nccf/com/nsst/prod/nsst.YYYYMMDD/rtgssthr_grb_0.5.grib2
+ * 
+ * NOTE: Using 0.5° resolution file (rtgssthr_grb_0.5.grib2) which is appropriate for our use case
  */
 
 /**
@@ -25,13 +27,15 @@ export function buildNSSTBaseUrl(): string {
 
 /**
  * Builds the URL for a specific NSST GRIB2 file
+ * Uses 0.5° resolution file (rtgssthr_grb_0.5.grib2) which was working before
  * @param date - Date for the NSST file (defaults to today)
  * @returns Full URL to the GRIB2 file
  */
 export function buildNSSTGrib2Url(date: Date = new Date()): string {
   const dateStr = formatDateString(date);
   const base = buildNSSTBaseUrl();
-  return `${base}/nsst.${dateStr}/nsst.${dateStr}.grb2`;
+  // Using 0.5° resolution file (was working before)
+  return `${base}/nsst.${dateStr}/rtgssthr_grb_0.5.grib2`;
 }
 
 /**

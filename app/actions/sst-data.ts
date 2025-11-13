@@ -8,11 +8,15 @@
 
 import { fetchNSSTData } from '@/lib/nsst-fetcher';
 import { isCacheValid, readCache, writeCache } from '@/lib/cache-manager';
+import { TEST_BOUNDS, PRODUCTION_BOUNDS, TEST_MODE } from '@/lib/cache-config';
 import type { SSTDataResponse } from '@/types/sst';
 
 /**
- * Gets SST data for all basins (global coverage)
+ * Gets SST data for all basins (global coverage) or test region (1° x 1°)
  * Uses cache if available and valid, otherwise fetches from NOMADS NSST
+ * 
+ * Test mode: Set TEST_MODE=true environment variable to use 1° x 1° test bounds
+ * Production mode: Uses full global coverage (-40°N to 60°N, -180° to 180°)
  * 
  * @returns SST data response with grid points
  */
@@ -20,15 +24,11 @@ export async function getSSTData(): Promise<SSTDataResponse> {
   try {
     console.log('[SST Action] ========================================');
     console.log('[SST Action] Server Action: getSSTData() called');
+    console.log(`[SST Action] Mode: ${TEST_MODE ? 'TEST (1° x 1° bounds)' : 'PRODUCTION (global coverage)'}`);
     console.log('[SST Action] Data source: NOAA NOMADS NSST (GRIB2)');
     
-    // Global bounds covering all hurricane basins
-    const globalBounds = {
-      minLat: -40,
-      maxLat: 60,
-      minLon: -180,
-      maxLon: 180
-    };
+    // Use test bounds if in test mode, otherwise use production bounds
+    const bounds = TEST_MODE ? TEST_BOUNDS : PRODUCTION_BOUNDS;
     
     // Check cache first
     console.log('[SST Action] Checking cache...');
@@ -46,7 +46,7 @@ export async function getSSTData(): Promise<SSTDataResponse> {
     
     // Cache miss or invalid - fetch fresh NSST data
     console.log('[SST Action] Cache miss or invalid, fetching fresh NSST data...');
-    const data = await fetchNSSTData(globalBounds);
+    const data = await fetchNSSTData(bounds);
     
     // Cache the result
     console.log('[SST Action] Caching fetched data...');

@@ -12,15 +12,14 @@ import { buildNSSTGrib2Url, buildNSSTIndexUrl, findLatestAvailableNSSTDate, form
 import { fetchAndParseGRIB2Index } from './grib2-index-parser';
 import { fetchGRIB2Subset } from './grib2-subset-fetch';
 import { parseNSSTGRIB2 } from './nsst-grib2-parser';
-
-const GRIB2_CACHE_DIR = path.join(process.cwd(), 'data', 'cache', 'grib2', 'nsst');
+import { getNSSTGRIB2CacheDir, getGRIB2Prefix } from './cache-config';
 
 /**
  * Ensures the GRIB2 cache directory exists
  */
 async function ensureGRIB2CacheDir(): Promise<void> {
   try {
-    await fs.mkdir(GRIB2_CACHE_DIR, { recursive: true });
+    await fs.mkdir(getNSSTGRIB2CacheDir(), { recursive: true });
   } catch (error) {
     console.error('[NSST] Error creating GRIB2 cache directory:', error);
     throw error;
@@ -32,22 +31,25 @@ async function ensureGRIB2CacheDir(): Promise<void> {
  */
 function getCachedGRIB2Path(date: Date): string {
   const dateStr = formatDateString(date);
-  return path.join(GRIB2_CACHE_DIR, `nsst.${dateStr}.grb2`);
+  const prefix = getGRIB2Prefix();
+  return path.join(getNSSTGRIB2CacheDir(), `${prefix}nsst.${dateStr}.grb2`);
 }
 
 /**
- * Checks if a cached GRIB2 file exists and is recent (within 24 hours)
+ * Checks if a cached GRIB2 file exists
+ * 
+ * Note: We check for file existence, not age, because:
+ * - GRIB2 files can be reused even if older than 24 hours
+ * - The JSON cache has its own TTL validation
+ * - If GRIB2 exists, we can parse it to generate/refresh JSON cache
  */
 async function isGRIB2CacheValid(date: Date): Promise<boolean> {
   try {
     const filePath = getCachedGRIB2Path(date);
-    const stats = await fs.stat(filePath);
-    const age = Date.now() - stats.mtimeMs;
-    const maxAge = 24 * 60 * 60 * 1000; // 24 hours
-    
-    return age < maxAge;
+    await fs.access(filePath);
+    return true; // File exists, can be used
   } catch {
-    return false;
+    return false; // File doesn't exist
   }
 }
 
@@ -56,34 +58,98 @@ async function isGRIB2CacheValid(date: Date): Promise<boolean> {
  * @param bounds - Geographic bounds to fetch data for
  * @returns SST data response with grid points
  */
+/**
+ * Finds any existing cached GRIB2 file (regardless of date)
+ * Returns the date of the cached file if found
+ */
+async function findCachedGRIB2File(): Promise<Date | null> {
+  try {
+    await ensureGRIB2CacheDir();
+    const files = await fs.readdir(getNSSTGRIB2CacheDir());
+    const prefix = getGRIB2Prefix();
+    const gribFiles = files.filter(f => f.startsWith(`${prefix}nsst.`) && f.endsWith('.grb2'));
+    
+    if (gribFiles.length === 0) {
+      return null;
+    }
+    
+    // Get the most recent file by modification time
+    let latestFile: string | null = null;
+    let latestTime = 0;
+    
+    for (const file of gribFiles) {
+      const filePath = path.join(getNSSTGRIB2CacheDir(), file);
+      const stats = await fs.stat(filePath);
+      if (stats.mtimeMs > latestTime) {
+        latestTime = stats.mtimeMs;
+        latestFile = file;
+      }
+    }
+    
+    if (!latestFile) {
+      return null;
+    }
+    
+    // Extract date from filename: [test-]nsst.YYYYMMDD.grb2
+    const dateMatch = latestFile.match(/(?:test-)?nsst\.(\d{8})\.grb2/);
+    if (dateMatch) {
+      const dateStr = dateMatch[1];
+      const year = parseInt(dateStr.substring(0, 4));
+      const month = parseInt(dateStr.substring(4, 6)) - 1;
+      const day = parseInt(dateStr.substring(6, 8));
+      return new Date(year, month, day);
+    }
+    
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 export async function fetchNSSTData(bounds: GeographicBounds): Promise<SSTDataResponse> {
   console.log('[NSST] ========================================');
   console.log('[NSST] Starting NSST data fetch from NOMADS...');
   console.log(`[NSST] Bounds: ${bounds.minLat}°N-${bounds.maxLat}°N, ${bounds.minLon}°-${bounds.maxLon}°`);
   const startTime = Date.now();
   
-  // Step 1: Find latest available NSST date
-  console.log('[NSST] Step 1: Finding latest available NSST date...');
-  const dataDate = await findLatestAvailableNSSTDate(5);
-  if (!dataDate) {
-    throw new Error('No NSST data available in the last 5 days');
-  }
-  
-  const dateStr = formatDateString(dataDate);
-  console.log(`[NSST] ✓ Found latest NSST data: ${dateStr}`);
-  
-  // Step 2: Check if we have cached GRIB2 file
-  console.log('[NSST] Step 2: Checking GRIB2 cache...');
   await ensureGRIB2CacheDir();
-  const cachedGribPath = getCachedGRIB2Path(dataDate);
+  let dataDate: Date | null = null;
   let gribFilePath: string;
   
-  if (await isGRIB2CacheValid(dataDate)) {
-    console.log(`[NSST] ✓ Using cached GRIB2 file: ${cachedGribPath}`);
-    gribFilePath = cachedGribPath;
-  } else {
-    // Step 3: Download GRIB2 subset (only SST variable)
-    console.log('[NSST] Step 3: Downloading GRIB2 subset from NOMADS...');
+  // Step 1: Check if we have any cached GRIB2 file first
+  console.log('[NSST] Step 1: Checking for existing GRIB2 cache...');
+  const cachedDate = await findCachedGRIB2File();
+  if (cachedDate) {
+    const cachedGribPath = getCachedGRIB2Path(cachedDate);
+    if (await isGRIB2CacheValid(cachedDate)) {
+      console.log(`[NSST] ✓ Found cached GRIB2 file: ${formatDateString(cachedDate)}`);
+      dataDate = cachedDate;
+      gribFilePath = cachedGribPath;
+    }
+  }
+  
+  // Step 2: If no cached GRIB2, try to find latest available NSST date from NOMADS
+  if (!dataDate) {
+    console.log('[NSST] Step 2: No cached GRIB2 found, checking NOMADS for latest available date...');
+    // Check further back (up to 30 days) since NSST data may have longer lag
+    dataDate = await findLatestAvailableNSSTDate(30);
+    if (!dataDate) {
+      throw new Error('No NSST data available in the last 30 days and no cached GRIB2 files found');
+    }
+    
+    const dateStr = formatDateString(dataDate);
+    console.log(`[NSST] ✓ Found latest NSST data on NOMADS: ${dateStr}`);
+    
+    // Step 3: Check if we have cached GRIB2 file for this date
+    console.log('[NSST] Step 3: Checking GRIB2 cache for this date...');
+    const cachedGribPath = getCachedGRIB2Path(dataDate);
+    
+    if (await isGRIB2CacheValid(dataDate)) {
+      console.log(`[NSST] ✓ Using cached GRIB2 file: ${cachedGribPath}`);
+      gribFilePath = cachedGribPath;
+    } else {
+      // Step 4: Download GRIB2 subset (only SST variable)
+      console.log('[NSST] Step 4: Downloading GRIB2 subset from NOMADS...');
     
     const gribUrl = buildNSSTGrib2Url(dataDate);
     const indexUrl = buildNSSTIndexUrl(dataDate);
@@ -126,11 +192,14 @@ export async function fetchNSSTData(bounds: GeographicBounds): Promise<SSTDataRe
     await fs.writeFile(cachedGribPath, Buffer.from(gribBuffer));
     console.log(`[NSST] ✓ Saved GRIB2 subset to cache: ${cachedGribPath}`);
     
-    gribFilePath = cachedGribPath;
+      gribFilePath = cachedGribPath;
+    }
   }
   
-  // Step 4: Parse GRIB2 file with Python script
-  console.log('[NSST] Step 4: Parsing GRIB2 file with Python...');
+  const dateStr = formatDateString(dataDate);
+  
+  // Step 5: Parse GRIB2 file with Python script
+  console.log('[NSST] Step 5: Parsing GRIB2 file with Python...');
   console.log(`[NSST]   Calling: python3 scripts/extract-nsst-sst.py "${gribFilePath}"`);
   const gridPoints = await parseNSSTGRIB2(gribFilePath, bounds);
   

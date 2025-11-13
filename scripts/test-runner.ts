@@ -13,11 +13,17 @@
  *   npx tsx scripts/test-noaa-fetch.ts
  */
 
-// Import test functions
+// IMPORTANT: Set TEST_MODE before importing any modules that use it
+// This ensures cache-config.ts and other modules read the correct value
+if (process.env.TEST_MODE !== 'false') {
+  process.env.TEST_MODE = 'true';
+}
+
+// Import test functions (after setting TEST_MODE)
 import { runTests as runPITests } from './test-pi-calculation';
 import { runTests as runAtmosphericTests } from './test-atmospheric-fetch';
 import { runTests as runSSTTests } from './test-sst-fetch';
-import { pass, fail } from './test-colors';
+import { pass, fail, info, warn } from './test-colors';
 
 /**
  * Test Configuration
@@ -41,8 +47,21 @@ const TEST_CONFIG = {
 
 /**
  * Main test runner
+ * 
+ * IMPORTANT: Tests automatically use TEST_MODE=true to fetch 1° x 1° test regions
+ * This allows proper validation of data sources without requiring global data fetches
+ * TEST_MODE is set at the top of this file before any imports
  */
 async function runAllTests(): Promise<void> {
+  // TEST_MODE is already set at module load time (before imports)
+  if (process.env.TEST_MODE === 'true') {
+    console.log(info('ℹ️  TEST_MODE=true: Tests will use 1° x 1° test regions for validation'));
+    console.log('   This allows proper testing without requiring global data fetches\n');
+  } else {
+    console.log(warn('⚠️  TEST_MODE=false: Tests will use production (global) bounds'));
+    console.log('   This may require large buffers and take longer\n');
+  }
+  
   console.log('========================================');
   console.log('Test Runner - Hurricane MPI Maps');
   console.log('========================================');
