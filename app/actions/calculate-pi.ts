@@ -19,6 +19,7 @@ import type { GeographicBounds } from '@/types/geographic';
 import { getPICacheDir, getCachePrefix } from '@/lib/cache-config';
 import * as path from 'path';
 import * as fs from 'fs/promises';
+import { createWriteStream } from 'fs';
 
 /**
  * Ensures the PI cache directory exists
@@ -63,6 +64,18 @@ async function readPICache(sstDate: string, atmosphericDate: string): Promise<PI
     const cachePath = getPICachePath(sstDate, atmosphericDate);
     const fileContent = await fs.readFile(cachePath, 'utf-8');
     const cached: PIDataResponse = JSON.parse(fileContent);
+    
+    // Fix: Convert pmin from Pascals to millibars if needed (legacy cache issue)
+    // If pmin values are > 2000, they're likely in Pascals and need conversion
+    const needsConversion = cached.gridPoints.some(p => p.pmin > 2000);
+    if (needsConversion) {
+      console.log('[PI Action] Converting cached pmin values from Pascals to millibars...');
+      cached.gridPoints = cached.gridPoints.map(p => ({
+        ...p,
+        pmin: p.pmin > 2000 ? p.pmin / 100 : p.pmin
+      }));
+    }
+    
     return cached;
   } catch {
     return null;
@@ -71,12 +84,52 @@ async function readPICache(sstDate: string, atmosphericDate: string): Promise<PI
 
 /**
  * Writes PI results to cache
+ * Uses streaming to avoid "Invalid string length" errors with large datasets
  */
 async function writePICache(data: PIDataResponse): Promise<void> {
   await ensurePICacheDir();
   const cachePath = getPICachePath(data.sstDate, data.atmosphericDate);
-  await fs.writeFile(cachePath, JSON.stringify(data, null, 2), 'utf-8');
-  console.log(`[PI Action] Cached PI results: ${cachePath}`);
+  
+  // Use streaming to write large JSON files without hitting string length limits
+  const writeStream = createWriteStream(cachePath, { encoding: 'utf-8' });
+  
+  try {
+    // Write JSON incrementally to avoid memory issues
+    writeStream.write('{\n');
+    writeStream.write(`  "sstDate": ${JSON.stringify(data.sstDate)},\n`);
+    writeStream.write(`  "atmosphericDate": ${JSON.stringify(data.atmosphericDate)},\n`);
+    writeStream.write(`  "bounds": ${JSON.stringify(data.bounds)},\n`);
+    writeStream.write(`  "pointCount": ${data.pointCount},\n`);
+    
+    // Write metadata if present
+    if (data.metadata) {
+      writeStream.write(`  "metadata": ${JSON.stringify(data.metadata)},\n`);
+    }
+    
+    writeStream.write(`  "gridPoints": [\n`);
+    
+    // Write grid points one by one
+    for (let i = 0; i < data.gridPoints.length; i++) {
+      const point = data.gridPoints[i];
+      const isLast = i === data.gridPoints.length - 1;
+      writeStream.write(`    ${JSON.stringify(point)}${isLast ? '' : ','}\n`);
+    }
+    
+    writeStream.write('  ]\n');
+    writeStream.write('}\n');
+    
+    // Close the stream
+    await new Promise<void>((resolve, reject) => {
+      writeStream.on('finish', resolve);
+      writeStream.on('error', reject);
+      writeStream.end();
+    });
+    
+    console.log(`[PI Action] Cached PI results: ${cachePath} (${data.pointCount} points)`);
+  } catch (error) {
+    writeStream.destroy();
+    throw error;
+  }
 }
 
 /**
@@ -151,11 +204,16 @@ export async function calculatePIData(bounds?: GeographicBounds): Promise<PIData
       maxLon: sstData.bounds.maxLon,
     };
     
-    // Step 3: Check cache
-    console.log('[PI Action] Step 2: Checking cache...');
-    const today = new Date().toISOString().split('T')[0]; // Use today for atmospheric date (simplified)
-    if (await isPICacheValid(sstData.date, today)) {
-      const cachedData = await readPICache(sstData.date, today);
+    // Step 3: Fetch atmospheric data first to get the actual date
+    // (We need the atmospheric date to check the cache correctly)
+    console.log('[PI Action] Step 2: Fetching atmospheric data...');
+    const atmosphericData = await getAtmosphericData(calculationBounds);
+    console.log(`[PI Action] ✓ Atmospheric data: ${atmosphericData.pointCount} profiles from ${atmosphericData.date}`);
+    
+    // Step 4: Check cache using actual atmospheric date
+    console.log('[PI Action] Step 3: Checking cache...');
+    if (await isPICacheValid(sstData.date, atmosphericData.date)) {
+      const cachedData = await readPICache(sstData.date, atmosphericData.date);
       if (cachedData) {
         console.log(`[PI Action] ✓ Cache hit: ${cachedData.pointCount} points`);
         console.log(`[PI Action]   SST date: ${cachedData.sstDate}, Atmospheric date: ${cachedData.atmosphericDate}`);
@@ -165,11 +223,6 @@ export async function calculatePIData(bounds?: GeographicBounds): Promise<PIData
     }
     
     console.log('[PI Action] Cache miss, calculating PI for all points...');
-    
-    // Step 4: Fetch atmospheric data for the same bounds
-    console.log('[PI Action] Step 3: Fetching atmospheric data...');
-    const atmosphericData = await getAtmosphericData(calculationBounds);
-    console.log(`[PI Action] ✓ Atmospheric data: ${atmosphericData.pointCount} profiles from ${atmosphericData.date}`);
     
     // Step 5: Calculate PI for each SST point
     console.log('[PI Action] Step 4: Calculating PI for all grid points...');
@@ -212,6 +265,12 @@ export async function calculatePIData(bounds?: GeographicBounds): Promise<PIData
       
       // Calculate PI
       try {
+        // Skip points with invalid SST (filter them out instead of throwing)
+        if (sstPoint.sst === null || sstPoint.sst === undefined || isNaN(sstPoint.sst) || sstPoint.sst < -2 || sstPoint.sst > 35) {
+          errorCount++;
+          continue; // Skip invalid SST points
+        }
+        
         const piResult = calculatePI(completeProfile);
         
         // Create PI grid point

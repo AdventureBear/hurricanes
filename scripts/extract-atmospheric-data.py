@@ -164,11 +164,15 @@ def extract_atmospheric_profile(
                     surface_temp_c = surface_temp - 273.15
                     
                     # Get surface pressure (convert Pa to mb if needed)
+                    # GFS surface pressure is in Pascals (typical range: 100000-102500 Pa = 1000-1025 mb)
                     if surface_press is not None:
                         surface_press_val = float(surface_press[i, j])
-                        if surface_press_val > 200000:  # Likely in Pa, convert to mb
-                            surface_press_val = surface_press_val / 100
-                        surface_press_mb = surface_press_val
+                        # If value is > 2000, it's likely in Pascals (normal range: 100000-102500 Pa)
+                        # If value is < 2000, it's likely already in millibars (normal range: 1000-1025 mb)
+                        if surface_press_val > 2000:
+                            surface_press_mb = surface_press_val / 100
+                        else:
+                            surface_press_mb = surface_press_val
                     else:
                         surface_press_mb = 1013.25  # Default
                     

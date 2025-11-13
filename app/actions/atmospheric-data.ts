@@ -16,6 +16,7 @@ import type { GeographicBounds } from '@/types/geographic';
 import { getAtmosphericCacheDir, getCachePrefix } from '@/lib/cache-config';
 import * as path from 'path';
 import * as fs from 'fs/promises';
+import { createWriteStream } from 'fs';
 
 /**
  * Ensures the atmospheric cache directory exists
@@ -82,12 +83,46 @@ async function readAtmosphericCache(date: string): Promise<AtmosphericDataRespon
 
 /**
  * Writes atmospheric data to cache
+ * Uses streaming to avoid "Invalid string length" errors with large datasets
  */
 async function writeAtmosphericCache(data: AtmosphericDataResponse): Promise<void> {
   await ensureAtmosphericCacheDir();
   const cachePath = getAtmosphericCachePath(data.date);
-  await fs.writeFile(cachePath, JSON.stringify(data, null, 2), 'utf-8');
-  console.log(`[Atmospheric Action] Cached atmospheric data: ${cachePath}`);
+  
+  // Use streaming to write large JSON files without hitting string length limits
+  const writeStream = createWriteStream(cachePath, { encoding: 'utf-8' });
+  
+  try {
+    // Write JSON incrementally to avoid memory issues
+    writeStream.write('{\n');
+    writeStream.write(`  "date": ${JSON.stringify(data.date)},\n`);
+    writeStream.write(`  "source": ${JSON.stringify(data.source)},\n`);
+    writeStream.write(`  "bounds": ${JSON.stringify(data.bounds)},\n`);
+    writeStream.write(`  "pointCount": ${data.pointCount},\n`);
+    writeStream.write(`  "gridPoints": [\n`);
+    
+    // Write grid points one by one
+    for (let i = 0; i < data.gridPoints.length; i++) {
+      const point = data.gridPoints[i];
+      const isLast = i === data.gridPoints.length - 1;
+      writeStream.write(`    ${JSON.stringify(point)}${isLast ? '' : ','}\n`);
+    }
+    
+    writeStream.write('  ]\n');
+    writeStream.write('}\n');
+    
+    // Close the stream
+    await new Promise<void>((resolve, reject) => {
+      writeStream.on('finish', resolve);
+      writeStream.on('error', reject);
+      writeStream.end();
+    });
+    
+    console.log(`[Atmospheric Action] Cached atmospheric data: ${cachePath} (${data.pointCount} points)`);
+  } catch (error) {
+    writeStream.destroy();
+    throw error;
+  }
 }
 
 /**

@@ -2,9 +2,12 @@
 
 import { useState } from 'react';
 import D3SSTMap from '@/components/d3-sst-map';
+import D3PressureMap from '@/components/d3-pressure-map';
+import PressureColorLegend from '@/components/pressure-color-legend';
 
 export default function Home() {
   const [dataDate, setDataDate] = useState<string | null>(null);
+  const [pressureDataDate, setPressureDataDate] = useState<string | null>(null);
 
   return (
     <div className="min-h-screen bg-gray-50 py-4 px-4">
@@ -15,30 +18,41 @@ export default function Home() {
             Maximum Potential Hurricane Intensity Maps
           </h1>
           <p className="text-base text-gray-600 mb-1">
-            Atlantic Basin Sea Surface Temperature
+            Atlantic Basin Sea Surface Temperature & Minimum Central Pressure
           </p>
           <p className="text-xs text-gray-500">
-            Data from NOAA NOMADS NSST (Near-surface Sea Surface Temperature, 0.25° resolution)
+            Data from NOAA NOMADS NSST (Near-surface Sea Surface Temperature, 0.5° resolution)
           </p>
         </header>
 
-        {/* Map and Sidebar Layout */}
-        <div className="flex gap-4 mb-3">
-          {/* Map Column - 70% width */}
-          <div className="w-[70%]">
-            <D3SSTMap onDataDateChange={setDataDate} />
+        {/* SST Map */}
+        <div className="mb-6">
+          <h2 className="text-xl font-semibold mb-2">Sea Surface Temperature</h2>
+          <div className="flex gap-4">
+            <div className="flex-1">
+              <D3SSTMap onDataDateChange={setDataDate} />
+            </div>
           </div>
-          
-          {/* Right Column - 30% width (blank for now) */}
-          <div className="w-[30%] bg-white rounded-lg border border-gray-300 p-4 shadow-lg">
-            {/* Reserved for future content */}
+        </div>
+
+        {/* Pressure Map */}
+        <div className="mb-3">
+          <h2 className="text-xl font-semibold mb-2">Minimum Central Pressure</h2>
+          <div className="flex gap-4">
+            <div className="flex-1">
+              <D3PressureMap onDataDateChange={setPressureDataDate} />
+            </div>
+            <div className="w-24">
+              <PressureColorLegend width={80} height={400} />
+            </div>
           </div>
         </div>
 
         {/* Info - Minimal */}
         <div className="bg-blue-100 border-2 border-blue-300 rounded-lg p-2 text-xs shadow-sm">
           <p className="text-blue-800">
-            <strong>Data Date:</strong> {dataDate || 'Loading...'} &nbsp;|&nbsp; 
+            <strong>SST Date:</strong> {dataDate || 'Loading...'} &nbsp;|&nbsp;
+            <strong>Pressure Date:</strong> {pressureDataDate || 'Loading...'} &nbsp;|&nbsp; 
             Map created by Suzanne Atkinson, Meteorology student, Penn State University. For comments, email <a href="mailto:sma101@psu.edu" className="underline">sma101@psu.edu</a>
           </p>
         </div>

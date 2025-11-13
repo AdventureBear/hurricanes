@@ -306,7 +306,8 @@ function getEnvironmentalThetaE(profile: AtmosphericProfile): number {
  */
 export function calculatePI(profile: AtmosphericProfile): PIResult {
   // Validate input
-  if (!profile.sst || profile.sst < -2 || profile.sst > 35) {
+  // Note: profile.sst can be 0°C (valid cold water), so check for null/undefined explicitly
+  if (profile.sst === null || profile.sst === undefined || isNaN(profile.sst) || profile.sst < -2 || profile.sst > 35) {
     throw new Error(`Invalid SST: ${profile.sst}°C (must be between -2 and 35°C)`);
   }
   
@@ -332,7 +333,12 @@ export function calculatePI(profile: AtmosphericProfile): PIResult {
   const delta_theta_e = theta_e_s - theta_e_env;
   
   // Get surface pressure for later use
-  const p_s = profile.surface.pressure;
+  // Note: Surface pressure from GFS may be in Pascals, convert to mb if needed
+  let p_s = profile.surface.pressure;
+  if (p_s > 2000) {
+    // Likely in Pascals, convert to millibars
+    p_s = p_s / 100;
+  }
   
   // Step 3: Calculate maximum potential wind speed
   // Reference: Emanuel 1988, Eq. 16
